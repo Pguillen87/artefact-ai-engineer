@@ -1,0 +1,18 @@
+services:
+  agent:
+    build: .
+    environment:
+      ARTEFACT_DATA_DIR: /data
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-6-luna}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      ENABLE_REAL_LLM: ${ENABLE_REAL_LLM:-0}
+    volumes:
+      - type: bind
+        source: ${ARTEFACT_SOURCE_DIR:?set ARTEFACT_SOURCE_DIR to the original data directory}
+        target: /data
+        read_only: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
