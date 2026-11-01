@@ -131,3 +131,9 @@ class FollowUpTests(unittest.TestCase):
    self.assertIn('Korg',agent.answer('Procuro Korg',chat_id=9))
    self.assertIn('1127.50',agent.answer('Qual o preço?',chat_id=9))
    self.assertIn('Procuro Korg',str(provider.request.call_args_list[2].args[0]))
+
+class GeneralQuestionTests(unittest.TestCase):
+ def test_capabilities_question_needs_no_api_or_tool(self):
+  provider=Mock();agent=ConversationAgent(None,provider)
+  answer=agent.answer('O que você faz?',chat_id=1)
+  self.assertIn('produtos',answer.lower());provider.request.assert_not_called()

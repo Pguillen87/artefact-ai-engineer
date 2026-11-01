@@ -16,6 +16,8 @@ class ConversationAgent:
             return FALLBACK
         if _GREETING.fullmatch(text.strip()):
             return 'Olá! Como posso ajudar com instrumentos, pedidos ou políticas da loja?'
+        if re.fullmatch(r'(o que voc[eê] faz|quem [eé] voc[eê]|como voc[eê] pode ajudar)[?! .]*',text.strip(),re.I):
+            return 'Posso ajudar com produtos, pedidos fictícios e políticas da loja.'
         previous=self.history.get(chat_id,[]) if chat_id is not None else []
         messages=list(previous)+[{'role':'user','content':text}]
         user_evidence=' '.join(str(m.get('content','')) for m in messages if m.get('role')=='user')
