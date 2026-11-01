@@ -43,6 +43,10 @@ class Catalog:
             item = self.product(p['product_id'])
             if not available_only or item['available']:
                 found.append(item)
+        if available_only:
+            found.sort(key=lambda item: (-item['price_brl'], item['product_id']))
+            if len(found)>limit and limit>1:
+                return tuple(found[:limit-1]+[found[-1]])
         return tuple(found[:limit])
 
     def promotion(self, product_id):

@@ -56,7 +56,7 @@ class RuntimeTests(unittest.TestCase):
   from artefact.runtime import read_config
   with self.assertRaises(ValueError): read_config({})
   with self.assertRaises(ValueError): read_config({'ENABLE_REAL_LLM':'1','OPENAI_API_KEY':'dummy'})
-  config=read_config({'ENABLE_REAL_LLM':'1','OPENAI_API_KEY':'dummy','TELEGRAM_BOT_TOKEN':'dummy','ARTEFACT_DATA_DIR':'data','OPENAI_MODEL':'gpt-6-luna'})
+  config=read_config({'ENABLE_REAL_LLM':'1','OPENAI_API_KEY':'dummy','TELEGRAM_BOT_TOKEN':'dummy','ARTEFACT_DATA_DIR':'data','OPENAI_MODEL':'gpt-6-luna','OPENAI_BUDGET_USD':'0.05','OPENAI_MAX_CALLS':'10','OPENAI_INPUT_USD_PER_MILLION':'0.10','OPENAI_OUTPUT_USD_PER_MILLION':'0.50','ARTEFACT_STATE_PATH':'state.db'})
   self.assertEqual(config.model,'gpt-6-luna')
 
 class EndToEndMockTests(unittest.TestCase):
