@@ -1,11 +1,23 @@
 """Bounded Responses tool cycle for the fictional store."""
 from collections import OrderedDict
+from decimal import Decimal, InvalidOperation
 import json
 import re
 from .agent import Agent, FALLBACK
 from .state import BudgetExhausted
 
 _GREETING=re.compile(r'^(oi|ol[aá]|bom dia|boa tarde|boa noite)[!. ]*$',re.I)
+
+def _numbers(text):
+    values=set()
+    for token in re.findall(r'\d+(?:[.,]\d+)*',text):
+        if ',' in token and '.' in token:
+            token=token.replace('.','').replace(',','.') if token.rfind(',')>token.rfind('.') else token.replace(',','')
+        elif ',' in token:
+            token=token.replace(',','.')
+        try: values.add(Decimal(token))
+        except InvalidOperation: continue
+    return values
 
 class ConversationAgent:
     def __init__(self,snapshot,provider):
@@ -54,9 +66,8 @@ class ConversationAgent:
             answer=' '.join(segments).strip()
             if not answer or len(answer)>1000: return FALLBACK
             # Numeric facts must occur in returned evidence; this is a guard, not proof of grounding.
-            numbers=re.findall(r'\d+(?:[.,]\d+)?',answer)
             evidence_text=' '.join(x['output'] for x in results)
-            if any(number not in evidence_text for number in numbers): return FALLBACK
+            if not _numbers(answer).issubset(_numbers(evidence_text)): return FALLBACK
             if any(c.get('name')=='orders' for c in calls):
                 if re.search(r'pagamento.{0,30}(confirmad|aprovad|recebid|efetuad|pago)',answer,re.I):
                     return FALLBACK
