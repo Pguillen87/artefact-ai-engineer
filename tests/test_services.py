@@ -45,3 +45,25 @@ class MoreServiceTests(unittest.TestCase):
    service=Catalog(load_dataset(root))
    self.assertFalse(service.product(1)['available'])
    self.assertEqual(service.promotion(1)['status'],'none_available')
+
+class AgentContractTests(unittest.TestCase):
+ def setUp(self):
+  self.tmp=TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+  p=Path(self.tmp.name);write_dataset(p);self.snapshot=load_dataset(p)
+ def test_filters_category_price_and_availability(self):
+  catalog=Catalog(self.snapshot)
+  self.assertEqual(len(catalog.search('',category='Teclados e Pianos',max_price=Decimal('1200'),available_only=True)),1)
+  self.assertEqual(catalog.search('',category='Teclados e Pianos',max_price=Decimal('100'),available_only=True),())
+  self.assertEqual(catalog.search('',category='Guitarras'),())
+ def test_order_fields_distinguish_evidence(self):
+  order=OrderService(self.snapshot).lookup('Synthetic Customer')[0]
+  self.assertEqual(order['items'][0]['name'],'Korg Synth')
+  self.assertEqual(order['payment_method'],'pix')
+  self.assertIsNone(order['payment_confirmed'])
+  self.assertIsNone(order['delivered_at'])
+  self.assertIsNone(order['estimated_delivery'])
+ def test_policies_contacts_hours_guarantee(self):
+  self.assertIn('3321-4500',get_policy('contacts')['summary'])
+  self.assertIn('13h',get_policy('hours')['summary'])
+  self.assertIn('90',get_policy('warranty')['summary'])
+  self.assertIn('30',get_policy('exchange')['summary'])
