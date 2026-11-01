@@ -2,13 +2,27 @@
 from decimal import Decimal, ROUND_CEILING
 from contextlib import closing
 import sqlite3
+import os
+from pathlib import Path
 
 class BudgetExhausted(RuntimeError):
     pass
 
+def validate_state_path(path):
+    resolved=Path(path).resolve()
+    checkout=Path(__file__).resolve().parent.parent
+    roots=[checkout]
+    if os.environ.get('ARTEFACT_DATA_DIR'):
+        roots.append(Path(os.environ['ARTEFACT_DATA_DIR']).resolve())
+    if os.name=='nt':
+        roots.append(Path(r'C:\App\Artefact\Desafio Técnico AI Engineer 2026\data').resolve())
+    if any(resolved == root or root in resolved.parents for root in roots):
+        raise ValueError('Operational database must be outside checkout and source data')
+    return resolved
+
 class State:
     def __init__(self, path):
-        self.path=str(path)
+        self.path=str(validate_state_path(path))
         with closing(sqlite3.connect(self.path)) as db, db:
             db.execute('CREATE TABLE IF NOT EXISTS usage (id INTEGER PRIMARY KEY CHECK(id=1), calls INTEGER NOT NULL, micros INTEGER NOT NULL)')
             db.execute('INSERT OR IGNORE INTO usage VALUES (1,0,0)')

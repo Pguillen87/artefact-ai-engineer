@@ -40,3 +40,9 @@ class DemoFixtureTests(unittest.TestCase):
   snapshot=synthetic_snapshot()
   self.assertEqual(snapshot.tables['customers'][0]['name'],'Pessoa Exemplo')
   self.assertEqual(snapshot.tables['products'][0]['name'],'Teclado Exemplo')
+
+class CodexRequiredArgumentsTests(unittest.TestCase):
+ def test_required_tool_arguments_cannot_be_null(self):
+  with tempfile.TemporaryDirectory() as d:
+   runner=Mock(return_value=Mock(returncode=0,stdout=json.dumps({'calls':[{'name':'promotion','product_id':None}]})))
+   with self.assertRaises(ValueError):CodexLocalProvider('codex.exe',CodexQuota(Path(d)/'s.db',2),runner=runner).request([])
