@@ -137,3 +137,13 @@ class GeneralQuestionTests(unittest.TestCase):
   provider=Mock();agent=ConversationAgent(None,provider)
   answer=agent.answer('O que você faz?',chat_id=1)
   self.assertIn('produtos',answer.lower());provider.request.assert_not_called()
+
+class RecommendationToolTests(unittest.TestCase):
+ def test_recommendations_never_include_unavailable(self):
+  from artefact.agent import Agent
+  with TemporaryDirectory() as d:
+   root=Path(d);write_dataset(root,{'products':{'status':'coming_soon'}})
+   planner=Mock();planner.plan.return_value=[('recommend_products',{'text':'Korg'})]
+   result=Agent(load_dataset(root),planner).answer('Recomende Korg')
+   self.assertNotIn('Korg Synth',result)
+   self.assertIn('resultado',result)
