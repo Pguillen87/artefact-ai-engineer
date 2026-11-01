@@ -70,3 +70,10 @@ class StateIsolationTests(unittest.TestCase):
    root=Path(d)
    env={'ENABLE_CODEX_TELEGRAM':'1','TELEGRAM_BOT_TOKEN':'dummy','TELEGRAM_ALLOWED_CHAT_ID':'123','ARTEFACT_DATA_DIR':str(root),'CODEX_DEMO_STATE_PATH':str(root/'state.db'),'CODEX_DEMO_MAX_CALLS':'6'}
    with self.assertRaises(ValueError):read_host_config(env)
+
+class StartCommandTests(unittest.TestCase):
+ def test_start_is_local_greeting_without_model_call(self):
+  from artefact.conversation import ConversationAgent
+  planner=Mock();agent=ConversationAgent(None,planner)
+  self.assertIn('Olá',agent.answer('/start',chat_id=123))
+  planner.request.assert_not_called()

@@ -26,7 +26,7 @@ class ConversationAgent:
     def answer(self,text,chat_id=None):
         if not isinstance(text,str) or not text.strip() or len(text)>2000:
             return FALLBACK
-        if _GREETING.fullmatch(text.strip()):
+        if text.strip() == '/start' or _GREETING.fullmatch(text.strip()):
             return 'Olá! Como posso ajudar com instrumentos, pedidos ou políticas da loja?'
         if re.fullmatch(r'(o que voc[eê] faz|quem [eé] voc[eê]|como voc[eê] pode ajudar)[?! .]*',text.strip(),re.I):
             return 'Posso ajudar com produtos, pedidos fictícios e políticas da loja.'
