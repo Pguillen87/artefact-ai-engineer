@@ -10,6 +10,7 @@ import time
 from .agent import TelegramAdapter
 from .codex_local import CodexLocalProvider, CodexQuota
 from .conversation import ConversationAgent
+from .admin import published_snapshot
 from .data import StructuralError, load_dataset
 from .state import State
 from .telegram import TelegramClient, TelegramError
@@ -62,7 +63,7 @@ def main():
         quota=CodexQuota(config.state_path,config.max_calls)
         provider=CodexLocalProvider(executable,quota)
         client=TelegramClient(config.token)
-        agent=ConversationAgent(snapshot,provider)
+        agent=ConversationAgent(snapshot,provider,snapshot_loader=(lambda: published_snapshot(Path(os.environ['ARTEFACT_CATALOG_DB']),snapshot)) if os.environ.get('ARTEFACT_CATALOG_DB') else None)
         adapter=TelegramAdapter(agent,client.send,state=state,allowed_chat_id=config.allowed_chat_id)
     except (ValueError,OSError,StructuralError,sqlite3.Error) as exc:
         print(str(exc),file=sys.stderr);return 2

@@ -3,6 +3,7 @@ from collections import OrderedDict
 from decimal import InvalidOperation
 import json
 import re
+import sqlite3
 from .agent import Agent, FALLBACK
 from .state import BudgetExhausted
 from .rendering import render_results
@@ -10,8 +11,8 @@ from .rendering import render_results
 _GREETING=re.compile(r'^(oi|ol[aá]|bom dia|boa tarde|boa noite)[!. ]*$',re.I)
 
 class ConversationAgent:
-    def __init__(self,snapshot,provider):
-        self.snapshot=snapshot;self.provider=provider;self.history=OrderedDict()
+    def __init__(self,snapshot,provider,*,snapshot_loader=None):
+        self.snapshot=snapshot;self.provider=provider;self.snapshot_loader=snapshot_loader;self.history=OrderedDict()
 
     def answer(self,text,chat_id=None):
         if not isinstance(text,str) or not text.strip() or len(text)>2000:
@@ -24,6 +25,7 @@ class ConversationAgent:
         messages=list(previous)+[{'role':'user','content':text}]
         user_evidence=' '.join(str(m.get('content','')) for m in messages if m.get('role')=='user')
         try:
+            snapshot=self.snapshot_loader() if self.snapshot_loader else self.snapshot
             response=self.provider.request(messages)
             output=response.get('output')
             if not isinstance(output,list): return FALLBACK
@@ -43,7 +45,7 @@ class ConversationAgent:
                 seen.add(signature)
                 class SinglePlan:
                     def plan(self,_): return [(name,args)]
-                evidence=Agent(self.snapshot,SinglePlan()).answer(user_evidence)
+                evidence=Agent(snapshot,SinglePlan()).answer(user_evidence)
                 if evidence==FALLBACK: return FALLBACK
                 results.append({'type':'function_call_output','call_id':call_id,'output':evidence})
             if all(all(item.get('resultado') in (None, [], {}) for item in json.loads(result['output'])) for result in results):
@@ -58,5 +60,5 @@ class ConversationAgent:
                 self.history.move_to_end(chat_id)
                 if len(self.history)>100: self.history.popitem(last=False)
             return answer
-        except (ValueError,TypeError,KeyError,AttributeError,TimeoutError,OSError,InvalidOperation,BudgetExhausted):
+        except (ValueError,TypeError,KeyError,AttributeError,TimeoutError,OSError,InvalidOperation,BudgetExhausted,sqlite3.Error):
             return FALLBACK
