@@ -62,15 +62,15 @@ class HostFlowTests(unittest.TestCase):
   with TemporaryDirectory() as d:
    root=Path(d);write_dataset(root);state=State(root/'state.db');quota=CodexQuota(root/'state.db',2)
    plan={'calls':[{'name':'policy','topic':'pix','text':None,'category':None,'min_price':None,'max_price':None,'available_only':None,'product_id':None,'full_name':None}]}
-   runner=Mock(side_effect=[Mock(returncode=0,stdout=json.dumps(plan)),Mock(returncode=0,stdout=json.dumps({'answer':'O desconto Pix é 5% e não acumula com promoção.'}))])
+   runner=Mock(return_value=Mock(returncode=0,stdout=json.dumps(plan)))
    provider=CodexLocalProvider('codex.exe',quota,runner)
    send=Mock();adapter=TelegramAdapter(ConversationAgent(load_dataset(root),provider),send,state,allowed_chat_id=123)
    adapter.handle({'update_id':22,'message':{'chat':{'id':999,'type':'private'},'text':'Pix?'}})
    self.assertEqual(quota.usage(),0)
    adapter.handle({'update_id':23,'message':{'chat':{'id':123,'type':'private'},'text':'Pix?'}})
-   self.assertIn('5%',send.call_args.args[1]);self.assertEqual(quota.usage(),2)
+   self.assertIn('5%',send.call_args.args[1]);self.assertEqual(quota.usage(),1)
    adapter.handle({'update_id':23,'message':{'chat':{'id':123,'type':'private'},'text':'Pix?'}})
-   self.assertEqual(send.call_count,1);self.assertEqual(runner.call_count,2)
+   self.assertEqual(send.call_count,1);self.assertEqual(runner.call_count,1)
 
 class StateIsolationTests(unittest.TestCase):
  def test_state_cannot_be_written_within_original_data_directory(self):

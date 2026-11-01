@@ -48,13 +48,6 @@ class ConversationAgent:
                 results.append({'type':'function_call_output','call_id':call_id,'output':evidence})
             if all(all(item.get('resultado') in (None, [], {}) for item in json.loads(result['output'])) for result in results):
                 return 'Não encontrei informações suficientes para essa consulta.'
-            followup=messages+output+results
-            final=self.provider.request(followup,final=True)
-            output2=final.get('output',[])
-            if any(x.get('type')=='function_call' for x in output2 if isinstance(x,dict)): return FALLBACK
-            segments=[part.get('text','') for item in output2 if isinstance(item,dict) and item.get('type')=='message' for part in item.get('content',[]) if isinstance(part,dict) and part.get('type')=='output_text']
-            answer=' '.join(segments).strip()
-            if not answer or len(answer)>1000: return FALLBACK
             # Never publish model-written commercial assertions: bind each value to its typed field.
             evidence=[item for result in results for item in json.loads(result['output'])]
             answer=render_results(evidence)

@@ -77,8 +77,7 @@ class DataTests(unittest.TestCase):
   from artefact.conversation import ConversationAgent
   from artefact.state import State
   provider=Mock()
-  provider.request.side_effect=[{'output':[{'type':'function_call','name':'search_products','arguments':json.dumps({'text':product['name']}),'call_id':'a'}]},
-                                {'output':[{'type':'message','content':[{'type':'output_text','text':'O preço é R$ 1.127,00.'}]}]}]
+  provider.request.return_value={'output':[{'type':'function_call','name':'search_products','arguments':json.dumps({'text':product['name']}),'call_id':'a'}]}
   with TemporaryDirectory() as d:
    send=Mock();adapter=TelegramAdapter(ConversationAgent(snapshot,provider),send,State(Path(d)/'s.db'),allowed_chat_id=123)
    adapter.handle({'update_id':1,'message':{'chat':{'id':123,'type':'private'},'text':'Preço de '+product['name']+'?'}})
