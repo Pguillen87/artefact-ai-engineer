@@ -1,0 +1,16 @@
+# Explicitly exclude original datasets and local state.
+*.csv
+*.xlsx
+*.docx
+*.pdf
+*.eml
+*.zip
+*.mp4
+.env
+.env.*
+*.db
+*.sqlite*
+*.log
+__pycache__/
+.pytest_cache/
+.venv/
