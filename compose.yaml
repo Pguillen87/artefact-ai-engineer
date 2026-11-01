@@ -8,6 +8,7 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       ENABLE_REAL_LLM: ${ENABLE_REAL_LLM:-0}
       ARTEFACT_STATE_PATH: /state/agent.sqlite
+      ARTEFACT_CATALOG_DB: /catalog/catalog.sqlite
       OPENAI_BUDGET_USD: ${OPENAI_BUDGET_USD:-}
       OPENAI_MAX_CALLS: ${OPENAI_MAX_CALLS:-}
       OPENAI_INPUT_USD_PER_MILLION: ${OPENAI_INPUT_USD_PER_MILLION:-}
@@ -18,9 +19,36 @@ services:
         target: /data
         read_only: true
       - agent_state:/state
+      - catalog_data:/catalog:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+  admin:
+    build: .
+    command: ["python", "-m", "artefact.admin_web"]
+    profiles: ["admin"]
+    environment:
+      ARTEFACT_DATA_DIR: /data
+      ARTEFACT_ADMIN_BIND: 0.0.0.0
+      ARTEFACT_ADMIN_PORT: 8080
+      ARTEFACT_ADMIN_PASSWORD: ${ARTEFACT_ADMIN_PASSWORD:-}
+      ARTEFACT_ADMIN_DB: /admin/admin.sqlite
+      ARTEFACT_CATALOG_DB: /catalog/catalog.sqlite
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - type: bind
+        source: ${ARTEFACT_SOURCE_DIR:?set ARTEFACT_SOURCE_DIR to the original data directory}
+        target: /data
+        read_only: true
+      - admin_data:/admin
+      - catalog_data:/catalog
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     init: true
 volumes:
+  admin_data:
+  catalog_data:
   agent_state:

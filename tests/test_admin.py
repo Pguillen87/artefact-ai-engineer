@@ -60,3 +60,8 @@ class CatalogAdminTests(unittest.TestCase):
         self.assertNotIn('250,00',agent.answer('Preço Korg Piano?'))
         self.admin.approve(batch,'revisto'); self.admin.publish(batch)
         self.assertIn('250,00',agent.answer('Preço Korg Piano?'))
+
+    def test_operational_databases_outside_original_data(self):
+        from artefact.admin_web import validate_paths
+        with self.assertRaises(ValueError): validate_paths(self.root/'admin.db',self.root/'serving.db',self.root)
+        with self.assertRaises(ValueError): validate_paths(Path.cwd()/'local.db',self.root.parent/'other.db',self.root)
