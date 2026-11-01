@@ -32,16 +32,25 @@ class HostConfigTests(unittest.TestCase):
   env['TELEGRAM_ALLOWED_CHAT_ID']='-42'
   with self.assertRaises(ValueError):read_host_config(env)
  def test_poll_cycle_filters_and_acknowledges_updates(self):
-  from artefact.codex_telegram import poll_once, OtherChatPending
-  client=Mock();client.get_updates.return_value=[{'update_id':7,'message':{'chat':{'id':99,'type':'private'},'text':'x'}},{'update_id':8,'message':{'chat':{'id':123,'type':'private'},'text':'Oi'}}]
+  from artefact.codex_telegram import poll_once
+  client=Mock();client.get_updates.return_value=[{'update_id':7,'message':{'chat':{'id':99,'type':'private'},'text':'x'}},{'update_id':8,'message':{'chat':{'id':123,'type':'private'},'text':'Oi'}},{'update_id':9,'message':{'chat':{'id':99,'type':'private'},'text':'x'}},{'update_id':10,'edited_message':{}}]
   agent=Mock();agent.answer.return_value='Olá';send=Mock()
   with TemporaryDirectory() as d:
    adapter=TelegramAdapter(agent,send,State(Path(d)/'s.db'),allowed_chat_id=123)
-   with self.assertRaises(OtherChatPending): poll_once(client,adapter,0)
-   agent.answer.assert_not_called();send.assert_not_called()
-   client.get_updates.return_value=client.get_updates.return_value[1:]
-   self.assertEqual(poll_once(client,adapter,0),9)
+   self.assertEqual(poll_once(client,adapter,0),11)
+   self.assertEqual(poll_once(client,adapter,0),11)
   agent.answer.assert_called_once_with('Oi',chat_id=123);send.assert_called_once()
+
+ def test_send_failure_after_claim_is_at_most_once(self):
+  from artefact.codex_telegram import poll_once
+  from artefact.telegram import TelegramError
+  client=Mock();client.get_updates.return_value=[{'update_id':11,'message':{'chat':{'id':123,'type':'private'},'text':'Oi'}}]
+  agent=Mock();agent.answer.return_value='Olá';send=Mock(side_effect=TelegramError('failed'))
+  with TemporaryDirectory() as d:
+   path=Path(d)/'s.db';adapter=TelegramAdapter(agent,send,State(path),allowed_chat_id=123)
+   with self.assertRaises(TelegramError): poll_once(client,adapter,0)
+   retry=Mock();self.assertEqual(poll_once(client,TelegramAdapter(agent,retry,State(path),allowed_chat_id=123),0),12)
+   retry.assert_not_called();agent.answer.assert_called_once()
 
 class HostFlowTests(unittest.TestCase):
  def test_authorized_telegram_to_codex_bridge_and_budget(self):
@@ -77,3 +86,48 @@ class StartCommandTests(unittest.TestCase):
   planner=Mock();agent=ConversationAgent(None,planner)
   self.assertIn('Olá',agent.answer('/start',chat_id=123))
   planner.request.assert_not_called()
+ def test_all_operational_databases_reject_checkout_paths(self):
+  from artefact.codex_local import CodexQuota
+  from artefact.state import State
+  repo=Path(__file__).resolve().parents[1]
+  with TemporaryDirectory(dir=repo) as d:
+   path=Path(d)/'state.db'
+   with self.assertRaises(ValueError): State(path)
+   with self.assertRaises(ValueError): CodexQuota(path,3)
+
+class TelegramSecretSafetyTests(unittest.TestCase):
+ def test_http_failure_never_exposes_token(self):
+  from unittest.mock import patch
+  from artefact.telegram import TelegramClient,TelegramError
+  secret='fake-token-value'
+  with patch('artefact.telegram.urllib.request.urlopen',side_effect=OSError('sensitive '+secret)):
+   with self.assertRaises(TelegramError) as caught: TelegramClient(secret).get_updates(0)
+  self.assertNotIn(secret,str(caught.exception))
+  self.assertIsNone(caught.exception.__cause__)
+
+class PollFailureOrderingTests(unittest.TestCase):
+ def test_failure_does_not_prevent_later_authorized_update(self):
+  from artefact.codex_telegram import poll_once
+  from artefact.telegram import TelegramError
+  client=Mock();client.get_updates.return_value=[
+   {'update_id':20,'message':{'chat':{'id':999,'type':'private'},'text':'no'}},
+   {'update_id':21,'message':{'chat':{'id':123,'type':'private'},'text':'first'}},
+   {'update_id':22,'message':{'chat':{'id':123,'type':'private'},'text':'second'}}]
+  agent=Mock();agent.answer.return_value='ok'
+  with TemporaryDirectory() as d:
+   path=Path(d)/'state.db';failed=Mock(side_effect=TelegramError('failed'))
+   with self.assertRaises(TelegramError): poll_once(client,TelegramAdapter(agent,failed,State(path),123),0)
+   sender=Mock();offset=poll_once(client,TelegramAdapter(agent,sender,State(path),123),0)
+   self.assertEqual(offset,23);sender.assert_called_once_with(123,'ok')
+   self.assertEqual(agent.answer.call_count,2)
+
+class BaselineStatePathTests(unittest.TestCase):
+ def test_both_state_stores_reject_configured_input_directory(self):
+  import os
+  from unittest.mock import patch
+  from artefact.codex_local import CodexQuota
+  from artefact.state import State
+  with TemporaryDirectory() as d, patch.dict(os.environ,{'ARTEFACT_DATA_DIR':d}):
+   path=Path(d)/'state.db'
+   with self.assertRaises(ValueError):State(path)
+   with self.assertRaises(ValueError):CodexQuota(path,2)

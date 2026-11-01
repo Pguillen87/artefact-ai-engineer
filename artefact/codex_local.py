@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 
 from .agent import TOOLS
+from .state import validate_state_path
 
 class CodexLimit(ValueError):
     pass
@@ -16,7 +17,7 @@ class CodexLimit(ValueError):
 class CodexQuota:
     def __init__(self,path,max_calls):
         if type(max_calls) is not int or max_calls <= 0: raise ValueError('positive Codex call limit required')
-        self.path=str(path);self.max_calls=max_calls
+        self.path=str(validate_state_path(path));self.max_calls=max_calls
         with closing(sqlite3.connect(self.path)) as db, db:
             db.execute('CREATE TABLE IF NOT EXISTS codex_usage (id INTEGER PRIMARY KEY CHECK(id=1), calls INTEGER NOT NULL)')
             db.execute('INSERT OR IGNORE INTO codex_usage VALUES (1,0)')
