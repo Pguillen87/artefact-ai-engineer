@@ -1,4 +1,4 @@
-# Interactive local setup. The token is never printed or written to this repository.
+﻿# Interactive local setup. The token is never printed or written to this repository.
 # Windows User environment variables are stored in the user's registry in plaintext.
 $ErrorActionPreference = 'Stop'
 $tokenSecure = Read-Host 'Cole o token do bot (entrada oculta)' -AsSecureString
