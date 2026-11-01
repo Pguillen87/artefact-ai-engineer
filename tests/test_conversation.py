@@ -147,3 +147,26 @@ class RecommendationToolTests(unittest.TestCase):
    result=Agent(load_dataset(root),planner).answer('Recomende Korg')
    self.assertNotIn('Korg Synth',result)
    self.assertIn('resultado',result)
+
+class ThreeMockedJourneysTests(unittest.TestCase):
+ def test_product_policy_and_fictional_order_complete_cycles(self):
+  from decimal import Decimal
+  from artefact.state import State
+  from artefact.provider import ResponsesProvider
+  from artefact.agent import TelegramAdapter
+  sequences=[
+   ('Qual preço Korg?', 'search_products', '{"text":"Korg"}', 'O Korg Synth custa 1127.50.'),
+   ('Qual desconto Pix?', 'policy', '{"topic":"pix"}', 'O Pix dá 5% sem acumular com promoção.'),
+   ('Meu nome é Synthetic Customer, meu pedido?', 'orders', '{"full_name":"Synthetic Customer"}', 'O pedido registra total 1127.50.')]
+  with TemporaryDirectory() as d:
+   root=Path(d);write_dataset(root);state=State(root/'usage.db');wire=[]
+   for _,name,args,answer in sequences:
+    wire.extend([{'output':[{'type':'function_call','name':name,'arguments':args,'call_id':'call'}]}, {'output':[{'type':'message','content':[{'type':'output_text','text':answer}]}]}])
+   transport=Mock(side_effect=wire);send=Mock()
+   provider=ResponsesProvider('dummy','model',state,Decimal('1'),6,Decimal('0.1'),Decimal('0.5'),transport=transport)
+   adapter=TelegramAdapter(ConversationAgent(load_dataset(root),provider),send,state)
+   for index,(question,_,__,___) in enumerate(sequences):
+    adapter.handle({'update_id':index,'message':{'chat':{'id':index+1,'type':'private'},'text':question}})
+   self.assertEqual(send.call_count,3)
+   self.assertTrue(all('não consegui' not in call.args[1].lower() for call in send.call_args_list))
+   self.assertEqual(state.usage()['calls'],6)
