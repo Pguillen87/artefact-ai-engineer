@@ -219,3 +219,16 @@ class FieldBindingTests(unittest.TestCase):
   from artefact.rendering import render_results
   with self.assertRaises((ValueError,KeyError)):
    render_results([{'consulta':'search_products','resultado':[{'name':'Produto','product_id':250,'stock_quantity':12,'available':True}]}])
+ def test_tracking_and_estimate_remain_distinct_from_actual_delivery(self):
+  from artefact.rendering import render_results
+  result=render_results([{'consulta':'orders','resultado':[{'order_id':1,'status':'delivered','total_brl':'250.00','items':[],'payment_method':'pix','payment_confirmed':None,'tracking_code':'TEST123','estimated_delivery':'2026-01-03','delivered_at':None}]}])
+  self.assertIn('Previsão de entrega cadastrada: 2026-01-03',result)
+  self.assertIn('Código de rastreamento cadastrado: TEST123',result)
+  self.assertIn('Data efetiva de entrega não informada',result)
+ def test_oversized_rendered_response_is_not_silently_truncated(self):
+  from test_data import write_dataset
+  with TemporaryDirectory() as d:
+   root=Path(d);write_dataset(root,{'products':{'name':'Korg '+('x'*3600)}})
+   provider=Mock();provider.request.side_effect=[{'output':[{'type':'function_call','name':'search_products','arguments':'{"text":"Korg"}','call_id':'x'}]}, {'output':[{'type':'message','content':[{'type':'output_text','text':'Aqui está.'}]}]}]
+   answer=ConversationAgent(load_dataset(root),provider).answer('Korg?',chat_id=1)
+   self.assertIn('refine sua consulta',answer)

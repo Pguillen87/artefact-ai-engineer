@@ -36,6 +36,8 @@ def render_results(results):
                     lines.append(f"Método de pagamento registrado: {order['payment_method']}; confirmação do pagamento não informada.")
                 if order.get('estimated_delivery'):
                     lines.append(f"Previsão de entrega cadastrada: {order['estimated_delivery']}.")
+                if order.get('tracking_code'):
+                    lines.append(f"Código de rastreamento cadastrado: {order['tracking_code']}.")
                 if order.get('delivered_at'):
                     lines.append(f"Data efetiva de entrega registrada: {order['delivered_at']}.")
                 else:

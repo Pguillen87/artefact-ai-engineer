@@ -58,6 +58,8 @@ class ConversationAgent:
             # Never publish model-written commercial assertions: bind each value to its typed field.
             evidence=[item for result in results for item in json.loads(result['output'])]
             answer=render_results(evidence)
+            if len(answer)>3500:
+                return 'A resposta é longa demais. Por favor, refine sua consulta.'
             if chat_id is not None:
                 self.history[chat_id]=(messages+[{'role':'assistant','content':answer}])[-6:]
                 self.history.move_to_end(chat_id)
