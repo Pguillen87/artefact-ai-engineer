@@ -13,3 +13,7 @@ The report contains table counts, hashes and field-level product findings with e
 The deterministic scanner currently detects selected brand discrepancies, keyboard/string count disagreements and some category/title disagreements. Its controlled vocabulary and patterns are deliberately conservative and **not exhaustive**; absence of a finding is not a guarantee of semantic correctness. Descriptive issues never invalidate independently typed price or stock. They do not correct the source, establish which field is true, or implement a seller handoff. No policy, bot, LLM, order authorization or administrative interface is implemented yet.
 
 The source dataset and restricted documents are excluded from this public repository. Python standard library is sufficient for this increment.
+
+## Commercial rules (incremental)
+
+`artefact.commercial` implements the approved demo boundaries: metropolitan shipping is R$35 below R$500 and free at or above R$500; an unconfirmed other destination requires a quote. Installment eligibility uses per-installment floors of R$50 for 1–3, R$80 for 4–6 and R$100 for 7–12 installments. This follows the approved specific tier rules. PIX gives 5% off only when no promotion has already been applied. These functions do not infer a customer's location, promotion eligibility or historical order values.
