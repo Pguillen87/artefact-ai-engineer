@@ -37,7 +37,9 @@ class ConversationTests(unittest.TestCase):
  def test_too_long_or_unsupported_final_text_is_rejected(self):
   for text in ['x'*2000,'O desconto é 99%.']:
    provider=Mock();provider.request.side_effect=[{'output':[{'type':'function_call','name':'policy','arguments':'{"topic":"pix"}','call_id':'c'}]}, {'output':[{'type':'message','content':[{'type':'output_text','text':text}]}]}]
-   self.assertIn('não consegui',ConversationAgent(self.snapshot,provider).answer('Pix?',chat_id=1).lower())
+   answer=ConversationAgent(self.snapshot,provider).answer('Pix?',chat_id=1).lower()
+   if len(text)>1000: self.assertIn('não consegui',answer)
+   else: self.assertNotIn('99%',answer);self.assertIn('5%',answer)
 
 class ProviderTests(unittest.TestCase):
  def test_strict_schema_and_budget_enforced_before_transport(self):
@@ -108,7 +110,8 @@ class ContradictionTests(unittest.TestCase):
     {'output':[{'type':'function_call','name':'orders','arguments':'{"full_name":"Synthetic Customer"}','call_id':'x'}]},
     {'output':[{'type':'message','content':[{'type':'output_text','text':'Seu pagamento está confirmado.'}]}]}]
    answer=ConversationAgent(load_dataset(root),provider).answer('Meu nome é Synthetic Customer, veja meu pedido',chat_id=1)
-   self.assertIn('não consegui',answer.lower())
+   self.assertNotIn('pagamento está confirmado',answer.lower())
+   self.assertIn('confirmação do pagamento não informada',answer.lower())
 
 class MissingEvidenceTests(unittest.TestCase):
  def test_missing_product_does_not_reach_model_for_invention(self):
@@ -129,7 +132,7 @@ class FollowUpTests(unittest.TestCase):
     {'output':[{'type':'message','content':[{'type':'output_text','text':'O valor é 1127.50.'}]}]}]
    agent=ConversationAgent(load_dataset(root),provider)
    self.assertIn('Korg',agent.answer('Procuro Korg',chat_id=9))
-   self.assertIn('1127.50',agent.answer('Qual o preço?',chat_id=9))
+   self.assertIn('1.127,50',agent.answer('Qual o preço?',chat_id=9))
    self.assertIn('Procuro Korg',str(provider.request.call_args_list[2].args[0]))
 
 class GeneralQuestionTests(unittest.TestCase):
@@ -178,3 +181,41 @@ class LocaleEvidenceTests(unittest.TestCase):
     {'output':[{'type':'function_call','name':'search_products','arguments':'{"text":"Korg"}','call_id':'x'}]},
     {'output':[{'type':'message','content':[{'type':'output_text','text':'O Korg Synth custa R$ 1.127,50.'}]}]}]
    self.assertIn('1.127,50',ConversationAgent(load_dataset(root),provider).answer('Preço Korg?',chat_id=1))
+
+class CriticalEvidenceTests(unittest.TestCase):
+ def _answer(self, changes, tool, args, reply, question):
+  from test_data import write_dataset
+  with TemporaryDirectory() as d:
+   root=Path(d);write_dataset(root,changes);provider=Mock()
+   provider.request.side_effect=[{'output':[{'type':'function_call','name':tool,'arguments':__import__('json').dumps(args),'call_id':'x'}]}, {'output':[{'type':'message','content':[{'type':'output_text','text':reply}]}]}]
+   return ConversationAgent(load_dataset(root),provider).answer(question,chat_id=1)
+ def test_price_never_taken_from_id_or_stock(self):
+  for false_price in ('R$ 1.000','R$ 1','R$ 12','R$ 1,000.00','R$ 250,01'):
+   with self.subTest(false_price=false_price):
+    answer=self._answer({'products':{'price_brl':'250.00','stock_quantity':'12'}},'search_products',{'text':'Korg'},'Custa '+false_price+'.','Preço Korg?')
+    self.assertNotIn(false_price,answer)
+    self.assertIn('250,00',answer)
+ def test_correct_price_derived_from_typed_evidence_for_multiple_formats(self):
+  for rendered in ('R$ 250,00','R$ 250.00','R$ 2.500,00','R$ 2,500.00'):
+   value='2500.00' if '500' in rendered else '250.00'
+   answer=self._answer({'products':{'price_brl':value}},'search_products',{'text':'Korg'},'Custa '+rendered+'.','Preço Korg?')
+   self.assertIn('2.500,00' if value=='2500.00' else '250,00',answer)
+ def test_delivered_status_is_not_physical_delivery_confirmation(self):
+  for reply in ('Entregue fisicamente em 01/01/2026.','Recebido pelo cliente.','A entrega foi confirmada.','Pagamento confirmado.'):
+   answer=self._answer({'orders':{'status':'delivered','estimated_delivery':'2026-01-03'}},'orders',{'full_name':'Synthetic Customer'},reply,'Synthetic Customer pedido')
+   self.assertIn('status cadastrado',answer.lower());self.assertIn('entregue',answer.lower())
+   self.assertNotIn('confirmada em',answer.lower());self.assertNotIn('pagamento confirmado',answer.lower())
+   self.assertIn('data efetiva',answer.lower())
+
+class FieldBindingTests(unittest.TestCase):
+ def test_prices_and_stocks_remain_bound_to_each_product(self):
+  from artefact.rendering import render_results
+  result=render_results([{'consulta':'search_products','resultado':[
+   {'name':'Produto A','product_id':1,'price_brl':'250.00','stock_quantity':12,'available':True},
+   {'name':'Produto B','product_id':250,'price_brl':'12.00','stock_quantity':1,'available':True}]}])
+  self.assertIn('Produto A: R$ 250,00; disponível no cadastro, estoque registrado de 12',result)
+  self.assertIn('Produto B: R$ 12,00; disponível no cadastro, estoque registrado de 1',result)
+ def test_absent_price_is_not_synthesized_from_other_fields(self):
+  from artefact.rendering import render_results
+  with self.assertRaises((ValueError,KeyError)):
+   render_results([{'consulta':'search_products','resultado':[{'name':'Produto','product_id':250,'stock_quantity':12,'available':True}]}])
