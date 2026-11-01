@@ -67,6 +67,11 @@ class DataTests(unittest.TestCase):
   self.assertEqual(product['price_brl'],Decimal('1127'))
   self.assertTrue(any(i.product_id==142 and i.field=='specs.keys' for i in snapshot.issues))
   self.assertTrue(any(i.product_id==142 and i.rule=='brand_conflict' for i in snapshot.issues))
+  from artefact.services import OrderService
+  for order_id,total in [(3,Decimal('3450')),(20,Decimal('1400'))]:
+   order=next(o for o in snapshot.tables['orders'] if o['order_id']==order_id)
+   customer=next(c for c in snapshot.tables['customers'] if c['customer_id']==order['customer_id'])
+   self.assertEqual(next(o for o in OrderService(snapshot).lookup(customer['name']) if o['order_id']==order_id)['total_brl'],total)
   self.assertEqual(before,{p.name:p.read_bytes() for p in root.glob('*.csv')})
 
 class AdditionalDataTests(unittest.TestCase):

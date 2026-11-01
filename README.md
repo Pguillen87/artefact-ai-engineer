@@ -17,3 +17,9 @@ The source dataset and restricted documents are excluded from this public reposi
 ## Commercial rules (incremental)
 
 `artefact.commercial` implements the approved demo boundaries: metropolitan shipping is R$35 below R$500 and free at or above R$500; an unconfirmed other destination requires a quote. Installment eligibility uses per-installment floors of R$50 for 1–3, R$80 for 4–6 and R$100 for 7–12 installments. This follows the approved specific tier rules. PIX gives 5% off only when no promotion has already been applied. These functions do not infer a customer's location, promotion eligibility or historical order values.
+
+## Read-only demo services
+
+`Catalog` searches by name, exposes typed commercial fields and masks a description or individual specification when the scanner flags a conflict. Availability means `active` and positive stock; promotion flags describe only the source snapshot, with ambiguous active promotions explicitly reported. Unflagged fields are not guaranteed correct because scanning is not exhaustive.
+
+`OrderService` is restricted to the challenge's fictional data: an exact normalized unique full-name match returns only selected order fields and recorded totals, never recalculated current prices. A name is not authentication and this interface must not be used for real customer data. Policies are short demo decisions attributed to ARTEFACT-11, not the restricted manual or a claim of current store policy.
