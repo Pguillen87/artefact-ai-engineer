@@ -170,3 +170,11 @@ class ThreeMockedJourneysTests(unittest.TestCase):
    self.assertEqual(send.call_count,3)
    self.assertTrue(all('não consegui' not in call.args[1].lower() for call in send.call_args_list))
    self.assertEqual(state.usage()['calls'],6)
+
+class LocaleEvidenceTests(unittest.TestCase):
+ def test_brl_format_is_compared_numerically_to_tool_evidence(self):
+  with TemporaryDirectory() as d:
+   root=Path(d);write_dataset(root);provider=Mock();provider.request.side_effect=[
+    {'output':[{'type':'function_call','name':'search_products','arguments':'{"text":"Korg"}','call_id':'x'}]},
+    {'output':[{'type':'message','content':[{'type':'output_text','text':'O Korg Synth custa R$ 1.127,50.'}]}]}]
+   self.assertIn('1.127,50',ConversationAgent(load_dataset(root),provider).answer('Preço Korg?',chat_id=1))
