@@ -22,6 +22,9 @@ class HostConfig:
     token: str = field(repr=False)
     allowed_chat_id: int = field(repr=False)
 
+class OtherChatPending(TelegramError):
+    """Stop polling rather than acknowledge unrelated queued updates."""
+
 
 def read_host_config(env):
     if env.get('ENABLE_CODEX_TELEGRAM')!='1':
@@ -44,7 +47,11 @@ def read_host_config(env):
 def poll_once(client,adapter,offset):
     for update in client.get_updates(offset):
         if not isinstance(update,dict) or type(update.get('update_id')) is not int:
-            continue
+            raise OtherChatPending('Unexpected update pending')
+        message=update.get('message')
+        chat=message.get('chat',{}) if isinstance(message,dict) else {}
+        if not isinstance(chat,dict) or chat.get('type')!='private' or chat.get('id') != adapter.allowed_chat_id:
+            raise OtherChatPending('Update from another chat or unsupported type pending')
         adapter.handle(update)
         offset=max(offset,update['update_id']+1)
     return offset
@@ -69,6 +76,9 @@ def main():
     try:
         while True:
             try: offset=poll_once(client,adapter,offset)
+            except OtherChatPending:
+                print('Há atualização de outro chat ou tipo não suportado; polling pausado sem confirmá-la.',file=sys.stderr,flush=True)
+                return 3
             except TelegramError:
                 print('Falha temporária no Telegram; nova tentativa.',file=sys.stderr,flush=True)
                 time.sleep(3)

@@ -32,11 +32,14 @@ class HostConfigTests(unittest.TestCase):
   env['TELEGRAM_ALLOWED_CHAT_ID']='-42'
   with self.assertRaises(ValueError):read_host_config(env)
  def test_poll_cycle_filters_and_acknowledges_updates(self):
-  from artefact.codex_telegram import poll_once
+  from artefact.codex_telegram import poll_once, OtherChatPending
   client=Mock();client.get_updates.return_value=[{'update_id':7,'message':{'chat':{'id':99,'type':'private'},'text':'x'}},{'update_id':8,'message':{'chat':{'id':123,'type':'private'},'text':'Oi'}}]
   agent=Mock();agent.answer.return_value='Olá';send=Mock()
   with TemporaryDirectory() as d:
    adapter=TelegramAdapter(agent,send,State(Path(d)/'s.db'),allowed_chat_id=123)
+   with self.assertRaises(OtherChatPending): poll_once(client,adapter,0)
+   agent.answer.assert_not_called();send.assert_not_called()
+   client.get_updates.return_value=client.get_updates.return_value[1:]
    self.assertEqual(poll_once(client,adapter,0),9)
   agent.answer.assert_called_once_with('Oi',chat_id=123);send.assert_called_once()
 

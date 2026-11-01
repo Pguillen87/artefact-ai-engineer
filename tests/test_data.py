@@ -72,6 +72,17 @@ class DataTests(unittest.TestCase):
    order=next(o for o in snapshot.tables['orders'] if o['order_id']==order_id)
    customer=next(c for c in snapshot.tables['customers'] if c['customer_id']==order['customer_id'])
    self.assertEqual(next(o for o in OrderService(snapshot).lookup(customer['name']) if o['order_id']==order_id)['total_brl'],total)
+  from unittest.mock import Mock
+  from artefact.agent import TelegramAdapter
+  from artefact.conversation import ConversationAgent
+  from artefact.state import State
+  provider=Mock()
+  provider.request.side_effect=[{'output':[{'type':'function_call','name':'search_products','arguments':json.dumps({'text':product['name']}),'call_id':'a'}]},
+                                {'output':[{'type':'message','content':[{'type':'output_text','text':'O preço é R$ 1.127,00.'}]}]}]
+  with TemporaryDirectory() as d:
+   send=Mock();adapter=TelegramAdapter(ConversationAgent(snapshot,provider),send,State(Path(d)/'s.db'),allowed_chat_id=123)
+   adapter.handle({'update_id':1,'message':{'chat':{'id':123,'type':'private'},'text':'Preço de '+product['name']+'?'}})
+   self.assertIn('1.127,00',send.call_args.args[1])
   self.assertEqual(before,{p.name:p.read_bytes() for p in root.glob('*.csv')})
 
 class AdditionalDataTests(unittest.TestCase):
