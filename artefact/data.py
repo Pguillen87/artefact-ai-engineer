@@ -67,6 +67,19 @@ def _freeze(value):
     return value
 
 
+def _json_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('duplicate JSON key')
+        result[key] = value
+    return result
+
+
+def _invalid_constant(value):
+    raise ValueError('invalid JSON constant')
+
+
 def _parse(table: str, raw: bytes) -> list[dict]:
     try:
         reader = csv.DictReader(io.StringIO(raw.decode('utf-8-sig'), newline=''), strict=True)
@@ -94,7 +107,7 @@ def _parse(table: str, raw: bytes) -> list[dict]:
                     elif field != 'estimated_delivery': raise ValueError(field)
                 if table == 'products':
                     if row['status'] not in {'active','discontinued','coming_soon'}: raise ValueError('status')
-                    row['specs'] = json.loads(row['specs'])
+                    row['specs'] = json.loads(row['specs'], object_pairs_hook=_json_object, parse_constant=_invalid_constant)
                     if not isinstance(row['specs'], dict): raise ValueError('specs')
                 if table == 'orders' and row['status'] not in {'pending','confirmed','shipped','delivered','cancelled'}: raise ValueError('status')
                 if table == 'promotions':
@@ -138,7 +151,7 @@ def _scan(products, categories):
                 issues.append(QualityIssue(pid,f'specs.{spec}','numeric_conflict',f'description={found[0]}; specs={value}','high'))
         for word, expected in groups.items():
             if re.search(r'\b'+word+r'\b',name) and expected not in categories_by_id[product['category_id']]:
-                issues.append(QualityIssue(pid,'category_id','category_conflict',f'name term={word}; category={categories_by_id[product["category_id"]]}','medium'))
+                issues.append(QualityIssue(pid,'category_id','category_conflict',f'name term={word}; category does not match','medium'))
     return tuple(issues)
 
 

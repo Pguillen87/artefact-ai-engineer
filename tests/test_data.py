@@ -91,3 +91,21 @@ class AdditionalDataTests(unittest.TestCase):
    root=Path(d);write_dataset(root)
    for table in HEADERS: (root / f'{table}.csv').rename(root / f'desafio_tecnico_ai_eng - {table}.csv')
    with self.assertRaises(StructuralError): load_dataset(root,verify_baseline=True)
+
+class ReportTests(unittest.TestCase):
+ def test_report_contains_only_sanitized_product_findings(self):
+  import subprocess, sys
+  with TemporaryDirectory() as d:
+   root=Path(d);write_dataset(root)
+   result=subprocess.run([sys.executable,'-m','artefact.report',str(root)],capture_output=True,text=True,check=True)
+   report=json.loads(result.stdout)
+   self.assertEqual(report['counts']['customers'],1)
+   self.assertTrue(any(i['field']=='specs.keys' for i in report['issues']))
+   self.assertNotIn('Synthetic Customer',result.stdout)
+
+class StrictJSONTests(unittest.TestCase):
+ def test_nonstandard_and_duplicate_json_keys_rejected(self):
+  for value in ['{"keys":NaN}', '{"keys":61,"keys":88}']:
+   with self.subTest(value=value), TemporaryDirectory() as d:
+    root=Path(d);write_dataset(root,{'products':{'specs':value}})
+    with self.assertRaises(StructuralError): load_dataset(root)
