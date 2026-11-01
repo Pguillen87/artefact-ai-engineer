@@ -93,12 +93,16 @@ class Agent:
 
 class TelegramAdapter:
     """Process private text updates; deduplication is per process, not durable."""
-    def __init__(self, agent, send, state=None):
-        self.agent=agent;self.send=send;self.seen=set();self.state=state
+    def __init__(self, agent, send, state=None, allowed_chat_id=None):
+        if allowed_chat_id is not None and (type(allowed_chat_id) is not int or allowed_chat_id <= 0):
+            raise ValueError('invalid allowed chat id')
+        self.agent=agent;self.send=send;self.seen=set();self.state=state;self.allowed_chat_id=allowed_chat_id
 
     def handle(self, update):
         update_id=update.get('update_id'); message=update.get('message',{}); chat=message.get('chat',{})
         if type(update_id) is not int or update_id in self.seen or chat.get('type')!='private' or type(chat.get('id')) is not int:
+            return
+        if self.allowed_chat_id is not None and chat['id'] != self.allowed_chat_id:
             return
         text=message.get('text')
         if not isinstance(text,str) or not text.strip() or len(text)>2000:
