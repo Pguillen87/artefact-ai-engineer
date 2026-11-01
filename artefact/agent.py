@@ -90,8 +90,8 @@ class Agent:
 
 class TelegramAdapter:
     """Process private text updates; deduplication is per process, not durable."""
-    def __init__(self, agent, send):
-        self.agent=agent;self.send=send;self.seen=set()
+    def __init__(self, agent, send, state=None):
+        self.agent=agent;self.send=send;self.seen=set();self.state=state
 
     def handle(self, update):
         update_id=update.get('update_id'); message=update.get('message',{}); chat=message.get('chat',{})
@@ -100,6 +100,8 @@ class TelegramAdapter:
         text=message.get('text')
         if not isinstance(text,str) or not text.strip() or len(text)>2000:
             return
-        answer=self.agent.answer(text)
+        if self.state is not None and not self.state.claim_update(update_id):
+            return
+        answer=self.agent.answer(text,chat_id=chat['id']) if self.state is not None else self.agent.answer(text)
         self.send(chat['id'],answer)
         self.seen.add(update_id)

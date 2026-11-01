@@ -7,12 +7,20 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       ENABLE_REAL_LLM: ${ENABLE_REAL_LLM:-0}
+      ARTEFACT_STATE_PATH: /state/agent.sqlite
+      OPENAI_BUDGET_USD: ${OPENAI_BUDGET_USD:-}
+      OPENAI_MAX_CALLS: ${OPENAI_MAX_CALLS:-}
+      OPENAI_INPUT_USD_PER_MILLION: ${OPENAI_INPUT_USD_PER_MILLION:-}
+      OPENAI_OUTPUT_USD_PER_MILLION: ${OPENAI_OUTPUT_USD_PER_MILLION:-}
     volumes:
       - type: bind
         source: ${ARTEFACT_SOURCE_DIR:?set ARTEFACT_SOURCE_DIR to the original data directory}
         target: /data
         read_only: true
+      - agent_state:/state
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     init: true
+volumes:
+  agent_state:

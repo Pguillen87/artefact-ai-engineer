@@ -67,3 +67,12 @@ class AgentContractTests(unittest.TestCase):
   self.assertIn('13h',get_policy('hours')['summary'])
   self.assertIn('90',get_policy('warranty')['summary'])
   self.assertIn('30',get_policy('exchange')['summary'])
+
+class RecommendationTests(unittest.TestCase):
+ def test_relevant_available_products_prioritize_expensive_with_cheaper_alternative(self):
+  from test_data import ROWS
+  with TemporaryDirectory() as d:
+   p=Path(d);other=list(ROWS['products']);other[0]='2';other[1]='2000';other[2]='Korg Premium'
+   write_dataset(p,extra={'products':other})
+   results=Catalog(load_dataset(p)).search('Korg',available_only=True)
+   self.assertEqual([x['product_id'] for x in results],[2,1])
