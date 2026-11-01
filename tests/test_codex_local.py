@@ -17,6 +17,8 @@ class CodexLocalTests(unittest.TestCase):
    self.assertEqual(result['output'][0]['name'],'policy')
    args,kwargs=runner.call_args
    self.assertIn('--disable',args[0]);self.assertIn('shell_tool',args[0]);self.assertIn('unified_exec',args[0]);self.assertFalse(kwargs['shell'])
+   self.assertNotIn('Pix?',args[0]);self.assertIn('Pix?',kwargs['input'])
+   self.assertIn('--ignore-user-config',args[0]);self.assertIn('--ephemeral',args[0]);self.assertIn('read-only',args[0])
    self.assertNotIn('OPENAI_API_KEY',kwargs['env']);self.assertNotIn('TELEGRAM_BOT_TOKEN',kwargs['env'])
  def test_call_limit_persists(self):
   with tempfile.TemporaryDirectory() as d:
