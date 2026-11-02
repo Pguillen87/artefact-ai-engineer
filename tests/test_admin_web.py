@@ -25,7 +25,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self.request('GET','/',dict(self.auth(),Host='evil.example'))[0],400)
     def test_origin_and_csrf_required(self):
         headers=dict(self.auth(),Origin='http://evil.example',**{'Content-Type':'application/x-www-form-urlencoded'})
-        self.assertEqual(self.request('POST','/rollback',headers,'version=0')[0],403)
+        self.assertEqual(self.request('POST','/rollback',headers,'')[0],403)
         headers['Origin']=f'http://127.0.0.1:{self.port}'
         self.assertEqual(self.request('POST','/rollback',headers,'version=0')[0],403)
     def test_bad_upload_is_rejected(self):
@@ -59,7 +59,8 @@ class WebTests(unittest.TestCase):
         from unittest.mock import patch
         from artefact.admin import MAX_BYTES
         headers=dict(self.auth(),Origin=f'http://127.0.0.1:{self.port}',**{'Content-Type':'multipart/form-data; boundary=x'})
-        self.assertEqual(self.request('POST','/upload',headers,b'x'*(MAX_BYTES+65537))[0],413)
+        oversized=dict(headers,**{'Content-Length':str(MAX_BYTES+65537)})
+        self.assertEqual(self.request('POST','/upload',oversized,b'')[0],413)
         self.assertEqual(self.request('POST','/upload',headers,b'not a multipart')[0],400)
         with patch.object(self.admin,'batches',side_effect=__import__('sqlite3').OperationalError('private secret')):
             status,body=self.request('GET','/',self.auth())

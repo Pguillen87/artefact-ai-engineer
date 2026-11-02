@@ -121,3 +121,13 @@ class CatalogAdminTests(unittest.TestCase):
         self.assertEqual(migrated.versions()[0]['id'],0)
         migrated.rollback(0,'Motivo após migração')
         self.assertEqual(migrated.history()[-1]['reason'],'Motivo após migração')
+
+    def test_publish_rejects_changed_findings_after_approval(self):
+        import sqlite3
+        batch=self.admin.stage(csv_bytes(product()));self.accept_all(batch);self.admin.approve(batch,'revisado')
+        altered=product();altered[4]='Korg com 61 teclas'
+        db=sqlite3.connect(self.root/'admin.db')
+        with db: db.execute('UPDATE batches SET csv=? WHERE id=?',(csv_bytes(altered),batch))
+        db.close()
+        with self.assertRaises(ValueError): self.admin.publish(batch)
+        self.assertEqual(len(published_snapshot(self.root/'serving.db',self.baseline).tables['products']),1)
