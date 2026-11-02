@@ -107,6 +107,7 @@ class ArchitectureContracts(unittest.TestCase):
             ('Qual promoção do produto 99?', 'promotion', {'product_id':99}),
             ('Quero Korg ou Yamaha', 'search_products', {'text':'Korg'}),
             ('Não quero Korg', 'search_products', {'text':'Korg'}),
+            ('Não quero Korg Synth', 'search_products', {'text':'Synth'}),
         ]
         for text, name, args in cases:
             with self.subTest(text=text):

@@ -70,6 +70,9 @@ def validate_catalog_intent(name: str, args: dict, text: str, snapshot, product_
         return False
     explicit_products = [p for p in snapshot.tables['products']
                          if re.search(r'(?<!\w)' + re.escape(normalize(p['name'])) + r'(?!\w)', normalized)]
+    if any(re.search(r'\b(?:nao quero|sem|exceto)\s+' + re.escape(normalize(product['name'])) + r'(?!\w)', normalized)
+           for product in explicit_products):
+        return False
     query = args.get('text')
     if query is not None:
         if not isinstance(query, str) or not query.strip():
