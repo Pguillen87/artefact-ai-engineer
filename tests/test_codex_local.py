@@ -24,6 +24,13 @@ class CodexLocalTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as d:
    p=Path(d)/'state.db';CodexQuota(p,1).reserve()
    with self.assertRaises(CodexLimit):CodexQuota(p,1).reserve()
+ def test_installment_quote_maps_to_the_same_provider_contract(self):
+  with tempfile.TemporaryDirectory() as d:
+   runner=Mock(return_value=Mock(returncode=0,stdout=json.dumps({'calls':[{'name':'installment_quote','amount_brl':'150.00','installments':2}]})))
+   provider=CodexLocalProvider('codex.exe',CodexQuota(Path(d)/'state.db',1),runner=runner)
+   result=provider.request([{'role':'user','content':'R$ 150,00 em 2x'}])
+   self.assertEqual(result['output'][0]['name'],'installment_quote')
+   self.assertEqual(json.loads(result['output'][0]['arguments']),{'amount_brl':'150.00','installments':2})
  def test_final_answer_mapped_as_response(self):
   with tempfile.TemporaryDirectory() as d:
    runner=Mock(return_value=Mock(returncode=0,stdout='{"answer":"Olá!"}'))

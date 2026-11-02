@@ -82,6 +82,33 @@ class DataTests(unittest.TestCase):
    send=Mock();adapter=TelegramAdapter(ConversationAgent(snapshot,provider),send,State(Path(d)/'s.db'),allowed_chat_id=123)
    adapter.handle({'update_id':1,'message':{'chat':{'id':123,'type':'private'},'text':'Preço de '+product['name']+'?'}})
    self.assertIn('1.127,00',send.call_args.args[1])
+  from artefact.services import Catalog
+  quote_cases=[
+   (127,('R$ 359,00','10%','R$ 323,10')),
+   (94,('R$ 5.999,00','8%','R$ 5.519,08')),
+   (121,('R$ 549,00','20%','R$ 439,20')),
+   (95,('R$ 2.199,00','5%','R$ 2.089,05')),
+  ]
+  for product_id,expected in quote_cases:
+   item=Catalog(snapshot).product(product_id)
+   self.assertIsNotNone(item)
+   provider=Mock()
+   provider.request.return_value={'output':[{'type':'function_call','name':'search_products',
+    'arguments':json.dumps({'text':item['name']}),'call_id':'commercial'}]}
+   answer=ConversationAgent(snapshot,provider).answer('Preço e condição comercial do '+item['name']+'?')
+   self.assertTrue(all(value in answer for value in expected),f'original product {product_id} quote incomplete')
+   self.assertIn('snapshot',answer.lower())
+   self.assertEqual(provider.request.call_count,1)
+  item=Catalog(snapshot).product(127)
+  provider=Mock()
+  provider.request.return_value={'output':[
+   {'type':'function_call','name':'search_products','arguments':json.dumps({'text':item['name']}),'call_id':'product'},
+   {'type':'function_call','name':'policy','arguments':'{"topic":"pix"}','call_id':'pix'}]}
+  answer=ConversationAgent(snapshot,provider).answer('Posso adicionar 5% Pix ao produto em promoção?')
+  self.assertIn('R$ 323,10',answer)
+  self.assertIn('não acumula',answer.lower())
+  self.assertNotIn('R$ 306,95',answer)
+  self.assertEqual(provider.request.call_count,1)
   self.assertEqual(before,{p.name:p.read_bytes() for p in root.glob('*.csv')})
 
 class AdditionalDataTests(unittest.TestCase):

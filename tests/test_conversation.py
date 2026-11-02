@@ -51,6 +51,11 @@ class ProviderTests(unittest.TestCase):
    for tool in body['tools']:
     self.assertEqual(set(tool['parameters']['required']),set(tool['parameters']['properties']))
     self.assertFalse(tool['parameters']['additionalProperties'])
+   installment=next(t for t in body['tools'] if t['name']=='installment_quote')
+   self.assertEqual(installment['parameters']['properties']['amount_brl']['type'],'string')
+   self.assertEqual(installment['parameters']['properties']['installments']['type'],'integer')
+   policy=next(t for t in body['tools'] if t['name']=='policy')
+   self.assertIn('regret',policy['parameters']['properties']['topic']['enum'])
    with self.assertRaises(BudgetExhausted): provider.request([{'role':'user','content':'outra'}])
    self.assertEqual(transport.call_count,1)
 
@@ -206,8 +211,9 @@ class FieldBindingTests(unittest.TestCase):
   self.assertIn('Produto B: R$ 12,00; disponível no cadastro, estoque registrado de 1',result)
  def test_absent_price_is_not_synthesized_from_other_fields(self):
   from artefact.rendering import render_results
-  with self.assertRaises((ValueError,KeyError)):
-   render_results([{'consulta':'search_products','resultado':[{'name':'Produto','product_id':250,'stock_quantity':12,'available':True}]}])
+  result=render_results([{'consulta':'search_products','resultado':[{'name':'Produto','product_id':250,'stock_quantity':12,'available':True}]}])
+  self.assertIn('preço não está disponível',result.lower())
+  self.assertNotIn('R$',result)
  def test_tracking_and_estimate_remain_distinct_from_actual_delivery(self):
   from artefact.rendering import render_results
   result=render_results([{'consulta':'orders','resultado':[{'order_id':1,'status':'delivered','total_brl':'250.00','items':[],'payment_method':'pix','payment_confirmed':None,'tracking_code':'TEST123','estimated_delivery':'2026-01-03','delivered_at':None}]}])
