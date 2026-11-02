@@ -2,6 +2,8 @@
 from __future__ import annotations
 import csv
 import io
+import hashlib
+from hmac import compare_digest as hmac_compare
 import json
 import sqlite3
 from dataclasses import asdict
@@ -54,13 +56,14 @@ def _connect(path):
     con = sqlite3.connect(str(path), timeout=10, factory=_Connection)
     con.execute('PRAGMA foreign_keys=ON')
     con.execute('PRAGMA journal_mode=DELETE')
+    con.execute('PRAGMA synchronous=FULL')
     return con
 
 
 def published_snapshot(path, baseline):
     """Read one active immutable version; never opens the administration database."""
     path = Path(path)
-    if not path.exists(): return baseline
+    if not path.exists(): raise FileNotFoundError("Catálogo publicado ausente")
     con = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=10)
     try:
         con.execute('BEGIN')
@@ -81,11 +84,27 @@ class CatalogAdmin:
         self.serving_path = Path(serving_path).resolve()
         self.baseline = baseline
         if self.admin_path == self.serving_path: raise ValueError('Bancos devem ser separados')
+        if self.admin_path.exists() != self.serving_path.exists(): raise ValueError('Um dos bancos persistentes está ausente')
+        existing = self.admin_path.exists()
+        if existing:
+            for path, tables in ((self.admin_path, {'batches','events'}),(self.serving_path, {'versions','active'})):
+                check=sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)
+                try:
+                    names={r[0] for r in check.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                    if not tables <= names: raise ValueError('Banco persistente incompleto')
+                    if path == self.serving_path and not check.execute('SELECT 1 FROM active a JOIN versions v ON v.id=a.version_id WHERE a.id=1').fetchone():
+                        raise ValueError('Versão ativa ausente')
+                finally: check.close()
         self.admin_path.parent.mkdir(parents=True, exist_ok=True)
         self.serving_path.parent.mkdir(parents=True, exist_ok=True)
         with _connect(self.admin_path) as con:
             con.execute('CREATE TABLE IF NOT EXISTS batches (id INTEGER PRIMARY KEY, csv BLOB NOT NULL, status TEXT NOT NULL, review TEXT NOT NULL DEFAULT "", created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)')
             con.execute('CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, action TEXT NOT NULL, batch_id INTEGER, version_id INTEGER, created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)')
+            columns={r[1] for r in con.execute('PRAGMA table_info(events)')}
+            if 'reason' not in columns: con.execute("ALTER TABLE events ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
+            columns={r[1] for r in con.execute('PRAGMA table_info(batches)')}
+            if 'approved_hash' not in columns: con.execute("ALTER TABLE batches ADD COLUMN approved_hash TEXT NOT NULL DEFAULT ''")
+            con.execute('CREATE TABLE IF NOT EXISTS decisions (batch_id INTEGER NOT NULL REFERENCES batches(id), issue_id TEXT NOT NULL, evidence TEXT NOT NULL, justification TEXT NOT NULL, created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(batch_id,issue_id))')
         with _connect(self.serving_path) as con:
             con.execute('CREATE TABLE IF NOT EXISTS versions (id INTEGER PRIMARY KEY, products BLOB NOT NULL, created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)')
             con.execute('CREATE TABLE IF NOT EXISTS active (id INTEGER PRIMARY KEY CHECK(id=1), version_id INTEGER NOT NULL REFERENCES versions(id))')
@@ -105,32 +124,72 @@ class CatalogAdmin:
         with _connect(self.admin_path) as con:
             return [{'id':r[0], 'status':r[1], 'created':r[2]} for r in con.execute('SELECT id,status,created FROM batches ORDER BY id DESC')]
 
+    def _issues(self, batch, raw):
+        products = _parse('products', raw)
+        result=[]
+        for issue in _scan(products,self.baseline.tables['categories']):
+            item=asdict(issue)
+            identity=json.dumps([batch,item],sort_keys=True,ensure_ascii=True,separators=(',',':'))
+            item['id']=hashlib.sha256(identity.encode()).hexdigest()
+            result.append(item)
+        return products,result
+
     def preview(self, batch):
         with _connect(self.admin_path) as con:
             row = con.execute('SELECT csv,status,review FROM batches WHERE id=?',(batch,)).fetchone()
-        if not row: raise ValueError('Lote inexistente')
-        products = _parse('products', row[0])
-        return {'status':row[1], 'review':row[2], 'products':products,
-                'issues':[asdict(i) for i in _scan(products,self.baseline.tables['categories'])]}
+            if not row: raise ValueError('Lote inexistente')
+            decisions={r[0]:r[1] for r in con.execute('SELECT issue_id,justification FROM decisions WHERE batch_id=?',(batch,))}
+        products,issues=self._issues(batch,row[0])
+        for issue in issues: issue['decision']=decisions.get(issue['id'])
+        return {'status':row[1], 'review':row[2], 'products':products,'issues':issues}
+
+    def decide(self, batch, issue_id, decision, justification):
+        if decision != 'accept': raise ValueError('Para corrigir, envie um novo lote corrigido')
+        if not isinstance(justification,str) or not justification.strip() or len(justification)>1000: raise ValueError('Justificativa necessária')
+        with _connect(self.admin_path) as con:
+            row=con.execute("SELECT csv FROM batches WHERE id=? AND status='staged'",(batch,)).fetchone()
+            if not row: raise ValueError('Lote não está em revisão')
+            issues=self._issues(batch,row[0])[1]
+            issue=next((i for i in issues if i['id']==issue_id),None)
+            if not issue: raise ValueError('Conflito desatualizado')
+            evidence=json.dumps(issue,sort_keys=True,ensure_ascii=False)
+            con.execute('INSERT OR REPLACE INTO decisions(batch_id,issue_id,evidence,justification) VALUES(?,?,?,?)',(batch,issue_id,evidence,justification.strip()))
+            con.execute("INSERT INTO events(action,batch_id,reason) VALUES('accept_conflict',?,?)",(batch,json.dumps({'issue':issue,'justification':justification.strip()},ensure_ascii=False)))
+
+    def _check_decisions(self, con, schema, batch, raw):
+        issues=self._issues(batch,raw)[1]
+        decisions={r[0] for r in con.execute(f'SELECT issue_id FROM {schema}.decisions WHERE batch_id=?',(batch,))}
+        if {i['id'] for i in issues} != decisions: raise ValueError('Há conflitos pendentes ou decisões desatualizadas')
 
     def approve(self, batch, review):
         if not isinstance(review,str) or not review.strip() or len(review)>1000: raise ValueError('Informe a revisão humana')
         with _connect(self.admin_path) as con:
-            cur=con.execute("UPDATE batches SET status='approved',review=? WHERE id=? AND status='staged'",(review.strip(),batch))
-            if cur.rowcount != 1: raise ValueError('Lote não está aguardando revisão')
-            con.execute("INSERT INTO events(action,batch_id) VALUES('approve',?)",(batch,))
+            row=con.execute("SELECT csv FROM batches WHERE id=? AND status='staged'",(batch,)).fetchone()
+            if not row: raise ValueError('Lote não está aguardando revisão')
+            self._check_decisions(con,'main',batch,row[0])
+            digest=hashlib.sha256(row[0]).hexdigest()
+            con.execute("UPDATE batches SET status='approved',review=?,approved_hash=? WHERE id=?",(review.strip(),digest,batch))
+            con.execute("INSERT INTO events(action,batch_id,reason) VALUES('approve',?,?)",(batch,review.strip()))
+
+    def history(self):
+        with _connect(self.admin_path) as con:
+            return [dict(zip(('action','batch_id','version_id','reason','created'),r)) for r in con.execute('SELECT action,batch_id,version_id,reason,created FROM events ORDER BY id')]
 
     def _transaction(self):
         con=_connect(self.serving_path)
         con.execute('ATTACH DATABASE ? AS admin', (str(self.admin_path),))
+        con.execute('PRAGMA admin.journal_mode=DELETE')
+        con.execute('PRAGMA admin.synchronous=FULL')
         con.execute('BEGIN IMMEDIATE')
         return con
 
     def publish(self, batch, *, _fail_for_test=False):
         con=self._transaction()
         try:
-            row=con.execute("SELECT csv FROM admin.batches WHERE id=? AND status='approved'",(batch,)).fetchone()
+            row=con.execute("SELECT csv,approved_hash FROM admin.batches WHERE id=? AND status='approved'",(batch,)).fetchone()
             if not row: raise ValueError('Aprovação humana necessária')
+            if not hmac_compare(row[1],hashlib.sha256(row[0]).hexdigest()): raise ValueError('Lote aprovado foi alterado')
+            self._check_decisions(con,'admin',batch,row[0])
             old=con.execute('SELECT v.products FROM active a JOIN versions v ON v.id=a.version_id WHERE a.id=1').fetchone()
             existing=_parse('products',old[0])
             added=_validate(row[0],self.baseline,existing)
@@ -147,15 +206,15 @@ class CatalogAdmin:
 
     def versions(self):
         with _connect(self.serving_path) as con:
-            active=con.execute('SELECT version_id FROM active WHERE id=1').fetchone()[0]
-            return [{'id':r[0], 'created':r[1], 'active':r[0]==active} for r in con.execute('SELECT id,created FROM versions ORDER BY id DESC')]
+            return [{'id':r[0], 'created':r[1], 'active':bool(r[2])} for r in con.execute('SELECT v.id,v.created,v.id=a.version_id FROM versions v CROSS JOIN active a WHERE a.id=1 ORDER BY v.id DESC')]
 
-    def rollback(self, version):
+    def rollback(self, version, reason):
+        if not isinstance(reason,str) or not reason.strip() or len(reason)>1000: raise ValueError('Motivo obrigatório')
         con=self._transaction()
         try:
             if not con.execute('SELECT 1 FROM versions WHERE id=?',(version,)).fetchone(): raise ValueError('Versão inexistente')
             con.execute('UPDATE active SET version_id=? WHERE id=1',(version,))
-            con.execute("INSERT INTO admin.events(action,version_id) VALUES('activate',?)",(version,))
+            con.execute("INSERT INTO admin.events(action,version_id,reason) VALUES('activate',?,?)",(version,reason.strip()))
             con.commit()
         except BaseException:
             con.rollback(); raise

@@ -46,8 +46,11 @@ class WebTests(unittest.TestCase):
         def post(path,**fields):
             return self.request('POST',path,headers,urlencode(dict(fields,csrf=self.server.csrf)))[0]
         self.assertEqual(post('/publish',batch=1),400)
+        self.assertEqual(post('/approve',batch=1,review='Conferido'),400)
+        for issue in self.admin.preview(1)['issues']:
+            self.assertEqual(post('/decide',batch=1,issue=issue['id'],justification='Revisado individualmente'),303)
         self.assertEqual(post('/approve',batch=1,review='Conferido'),303)
         self.assertEqual(post('/publish',batch=1),303)
         self.assertEqual(len(self.admin._existing()),1)
-        self.assertEqual(post('/rollback',version=0),303)
+        self.assertEqual(post('/rollback',version=0,reason='Teste sintético'),303)
         self.assertEqual(len(self.admin._existing()),0)

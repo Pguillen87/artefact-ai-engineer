@@ -63,7 +63,8 @@ class Handler(BaseHTTPRequestHandler):
                 for b in self.server.admin.batches(): body+=f'<li><a href="/batch?id={b["id"]}">Lote {b["id"]}</a> — {escape(b["status"])}</li>'
                 body+='</ul><h2>Versões publicadas</h2><ul>'
                 for v in self.server.admin.versions():
-                    body+=f'<li>Versão {v["id"]} {"(ativa)" if v["active"] else self._form("/rollback",{"version":v["id"]},"Ativar versão")}</li>'
+                    if v['active']: body+=f'<li>Versão {v["id"]} (ativa)</li>'
+                    else: body+=f'<li>Versão {v["id"]}<form method="post" action="/rollback"><input type="hidden" name="csrf" value="{self.server.csrf}"><input type="hidden" name="version" value="{v["id"]}"><label>Motivo <input name="reason" maxlength="1000" required></label><button>Ativar versão</button></form></li>'
                 body+='</ul>'
             elif target.path=='/batch':
                 batch=int(parse_qs(target.query)['id'][0]); info=self.server.admin.preview(batch)
@@ -71,7 +72,10 @@ class Handler(BaseHTTPRequestHandler):
                 for p in info['products']:
                     body+='<pre>'+escape(json.dumps(_plain(p),ensure_ascii=False,default=str,indent=2))+'</pre>'
                 body+='<h2>Conflitos por campo</h2>'
-                for issue in info['issues']: body+='<pre>'+escape(json.dumps(issue,ensure_ascii=False,indent=2))+'</pre>'
+                for issue in info['issues']:
+                    body+='<pre>'+escape(json.dumps(issue,ensure_ascii=False,indent=2))+'</pre>'
+                    if info['status']=='staged' and not issue['decision']:
+                        body+=f'<form method="post" action="/decide"><input type="hidden" name="csrf" value="{self.server.csrf}"><input type="hidden" name="batch" value="{batch}"><input type="hidden" name="issue" value="{issue["id"]}"><label>Justificativa <input name="justification" maxlength="1000" required></label><button>Aceitar esta exceção</button></form><p>Para corrigir o conflito, envie um novo CSV com os dados corrigidos.</p>'
                 if not info['issues']: body+='<p>Nenhum conflito detectado.</p>'
                 if info['status']=='staged':
                     body+=f'<form method="post" action="/approve"><input type="hidden" name="csrf" value="{self.server.csrf}"><input type="hidden" name="batch" value="{batch}"><label>Revisão humana <input name="review" maxlength="1000" required></label><button>Aprovar lote</button></form>'
@@ -79,7 +83,8 @@ class Handler(BaseHTTPRequestHandler):
                 body+='<p><a href="/">Voltar</a></p>'
             else: self._send(404,'Não encontrado');return
             self._send(200,'<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>Artefact Admin</title><body>'+body+'</body></html>')
-        except (ValueError,KeyError,IndexError,sqlite3.Error,StructuralError): self._send(400,'Consulta inválida')
+        except (sqlite3.Error,OSError): self._send(503,'Serviço temporariamente indisponível')
+        except (ValueError,KeyError,IndexError,StructuralError): self._send(400,'Consulta inválida')
     def do_POST(self):
         if not self._guard(): return
         if self.headers.get('Origin') != 'http://'+self.headers.get('Host',''):
@@ -108,15 +113,18 @@ class Handler(BaseHTTPRequestHandler):
                 filename,data=files['file']
                 if not filename.lower().endswith('.csv'): raise ValueError('Envie arquivo .csv')
                 batch=self.server.admin.stage(data); location=f'/batch?id={batch}'
+            elif self.path=='/decide':
+                batch=int(fields['batch']);self.server.admin.decide(batch,fields['issue'],'accept',fields['justification']);location=f'/batch?id={batch}'
             elif self.path=='/approve':
                 batch=int(fields['batch']);self.server.admin.approve(batch,fields['review']);location=f'/batch?id={batch}'
             elif self.path=='/publish':
                 self.server.admin.publish(int(fields['batch']));location='/'
             elif self.path=='/rollback':
-                self.server.admin.rollback(int(fields['version']));location='/'
+                self.server.admin.rollback(int(fields['version']),fields['reason']);location='/'
             else: self._send(404,'Não encontrado');return
             self._send(303,'',{'Location':location})
-        except (ValueError,KeyError,UnicodeError,sqlite3.Error,StructuralError): self._send(400,'Entrada inválida ou lote não publicável')
+        except (sqlite3.Error,OSError): self._send(503,'Serviço temporariamente indisponível')
+        except (ValueError,KeyError,UnicodeError,TypeError,StructuralError): self._send(400,'Entrada inválida ou lote não publicável')
 
 
 def validate_paths(admin_path, catalog_path, data_dir):

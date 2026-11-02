@@ -19,20 +19,24 @@ class CatalogAdminTests(unittest.TestCase):
         write_dataset(self.root); self.baseline=load_dataset(self.root)
         self.admin=CatalogAdmin(self.root/'admin.db',self.root/'serving.db',self.baseline)
     def tearDown(self): self.tmp.cleanup()
+    def accept_all(self,batch):
+        for issue in self.admin.preview(batch)['issues']:
+            self.admin.decide(batch,issue['id'],'accept','Revisado individualmente')
     def test_stage_review_publish_and_rollback(self):
         batch=self.admin.stage(csv_bytes(product()))
         self.assertTrue(self.admin.preview(batch)['issues'])
         self.assertEqual(len(published_snapshot(self.root/'serving.db',self.baseline).tables['products']),1)
         with self.assertRaises(ValueError): self.admin.publish(batch)
+        self.accept_all(batch)
         self.admin.approve(batch, 'Conferido pelo operador')
         version=self.admin.publish(batch)
         snap=published_snapshot(self.root/'serving.db',self.baseline)
         self.assertEqual(len(snap.tables['products']),2)
         self.assertEqual(str(snap.tables['products'][1]['price_brl']),'250.00')
         self.assertTrue(any(i.product_id==2 for i in snap.issues))
-        self.admin.rollback(0)
+        self.admin.rollback(0,'retorno')
         self.assertEqual(len(published_snapshot(self.root/'serving.db',self.baseline).tables['products']),1)
-        self.admin.rollback(version)
+        self.admin.rollback(version,'retorno')
         self.assertEqual(len(published_snapshot(self.root/'serving.db',self.baseline).tables['products']),2)
     def test_invalid_batch_is_never_staged(self):
         for raw in [csv_bytes(product(price='-1')),csv_bytes(product('1')),csv_bytes(product(),product()),csv_bytes(product(),product('3','bad')),b'wrong,header\n1,2',csv_bytes(product('3','1',''))]:
@@ -40,12 +44,12 @@ class CatalogAdminTests(unittest.TestCase):
                 with self.assertRaises((ValueError,StructuralError)): self.admin.stage(raw)
         self.assertEqual(self.admin.batches(),[])
     def test_failure_does_not_change_active_version(self):
-        batch=self.admin.stage(csv_bytes(product())); self.admin.approve(batch,'revisto')
+        batch=self.admin.stage(csv_bytes(product())); self.accept_all(batch); self.admin.approve(batch,'revisto')
         with self.assertRaises(RuntimeError): self.admin.publish(batch, _fail_for_test=True)
         self.assertEqual(len(published_snapshot(self.root/'serving.db',self.baseline).tables['products']),1)
         self.assertEqual(self.admin.preview(batch)['status'],'approved')
     def test_persistence_and_duplicate_published_id(self):
-        batch=self.admin.stage(csv_bytes(product())); self.admin.approve(batch,'revisto'); self.admin.publish(batch)
+        batch=self.admin.stage(csv_bytes(product())); self.accept_all(batch); self.admin.approve(batch,'revisto'); self.admin.publish(batch)
         another=CatalogAdmin(self.root/'admin.db',self.root/'serving.db',self.baseline)
         self.assertEqual(len(published_snapshot(self.root/'serving.db',self.baseline).tables['products']),2)
         with self.assertRaises(ValueError): another.stage(csv_bytes(product()))
@@ -58,10 +62,33 @@ class CatalogAdminTests(unittest.TestCase):
         agent=ConversationAgent(self.baseline,provider, snapshot_loader=lambda: published_snapshot(self.root/'serving.db',self.baseline))
         batch=self.admin.stage(csv_bytes(product()))
         self.assertNotIn('250,00',agent.answer('Preço Korg Piano?'))
-        self.admin.approve(batch,'revisto'); self.admin.publish(batch)
+        self.accept_all(batch); self.admin.approve(batch,'revisto'); self.admin.publish(batch)
         self.assertIn('250,00',agent.answer('Preço Korg Piano?'))
 
     def test_operational_databases_outside_original_data(self):
         from artefact.admin_web import validate_paths
         with self.assertRaises(ValueError): validate_paths(self.root/'admin.db',self.root/'serving.db',self.root)
         with self.assertRaises(ValueError): validate_paths(Path.cwd()/'local.db',self.root.parent/'other.db',self.root)
+
+    def test_each_conflict_requires_specific_decision_and_revalidation(self):
+        import sqlite3
+        batch=self.admin.stage(csv_bytes(product()))
+        issues=self.admin.preview(batch)['issues']; self.assertGreaterEqual(len(issues),2)
+        with self.assertRaises(ValueError): self.admin.approve(batch,'genérico')
+        with self.assertRaises(ValueError): self.admin.decide(batch,issues[0]['id'],'corrected','supostamente corrigido')
+        for issue in issues: self.admin.decide(batch,issue['id'],'accept','Conferido individualmente')
+        self.admin.approve(batch,'revisão completa')
+        db=sqlite3.connect(self.root/'admin.db')
+        with db: db.execute('UPDATE batches SET csv=? WHERE id=?',(csv_bytes(product(price='251.00')),batch))
+        db.close()
+        with self.assertRaises(ValueError): self.admin.publish(batch)
+
+    def test_rollback_requires_reason_and_persists(self):
+        with self.assertRaises(ValueError): self.admin.rollback(0,'')
+        with self.assertRaises(ValueError): self.admin.rollback(999,'correção')
+        self.admin.rollback(0,'retornar ao baseline')
+        another=CatalogAdmin(self.root/'admin.db',self.root/'serving.db',self.baseline)
+        self.assertTrue(any(e['reason']=='retornar ao baseline' for e in another.history()))
+
+    def test_missing_projection_fails_closed(self):
+        with self.assertRaises((OSError,ValueError)): published_snapshot(self.root/'missing.db',self.baseline)
