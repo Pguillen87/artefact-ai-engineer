@@ -67,7 +67,9 @@ def promotion_price(price: Decimal, discount_percent: Decimal) -> Decimal:
 
 
 _MONEY = re.compile(r'(?i)R\$\s*([0-9][0-9.,]*)')
-_INSTALLMENT_COUNT = re.compile(r'(?<![\w.,])([0-9]{1,2})\s*(?:x\b|vezes\b|parcelas?\b)', re.I)
+_COUNT_WORDS = {'um': 1, 'uma': 1, 'dois': 2, 'duas': 2, 'três': 3, 'tres': 3, 'quatro': 4, 'cinco': 5, 'seis': 6, 'sete': 7, 'oito': 8, 'nove': 9, 'dez': 10, 'onze': 11, 'doze': 12}
+_COUNT_PATTERN = r'(?:[0-9]{1,2}|um|uma|dois|duas|tr[eê]s|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)'
+_INSTALLMENT_COUNT = re.compile(r'(?<![\w.,])(' + _COUNT_PATTERN + r')\s*(?:x\b|vezes\b|parcelas?\b)', re.I)
 _ORDER_TOTAL_CONTEXT = re.compile(r'\b(?:pedido|total\s+hist[oó]rico|total\s+registrado|valor\s+do\s+pedido)\b', re.I)
 _PER_INSTALLMENT_CONTEXT = re.compile(r'(?i)(?:por\s+parcela|cada\s+parcela|piso\s+de|m[ií]nimo\s+de|parcela\s+m[ií]nima)')
 
@@ -133,13 +135,21 @@ def has_budget_context(text: str) -> bool:
     return bool(re.search(r'(?i)\b(?:orçamento|orcamento|para gastar|posso gastar|limite|teto|no m[aá]ximo|menos de|abaixo de)\b|\bat[eé]\s+r\$', text))
 
 
+def has_explicit_total_intent(text: str) -> bool:
+    """Require positive authority for treating an amount as a total or simulation."""
+    if has_budget_context(text):
+        return False
+    return bool(re.search(r'(?i)\b(?:simul\w*|parcelar|parcele|pagar|pague)\s+(?:(?:um|o)\s+)?(?:total\s+de\s+|valor\s+de\s+)?r\$|\bcompra\s+(?:ficou|custou|custa|[eé])\s+(?:em\s+)?r\$|\btotal\s+(?:da\s+compra\s+)?(?:[eé]|de|ficou)\s+(?:em\s+)?r\$|^\s*(?:na verdade,?\s*)?r\$', text))
+
+
 def extract_installment_count(text: str) -> int | None:
     if not isinstance(text, str) or _ORDER_TOTAL_CONTEXT.search(text):
         return None
     matches = _INSTALLMENT_COUNT.findall(text)
     if len(matches) != 1:
         return None
-    count = int(matches[0])
+    raw = matches[0].casefold()
+    count = int(raw) if raw.isdigit() else _COUNT_WORDS.get(raw, 0)
     return count if 1 <= count <= 12 else None
 
 
@@ -156,6 +166,8 @@ def parse_installment_request(text: str) -> InstallmentRequest | None:
     if not isinstance(text, str) or _ORDER_TOTAL_CONTEXT.search(text):
         return None
     if has_budget_context(text):
+        return None
+    if not has_explicit_total_intent(text) and not re.search(r'(?i)\d{1,2}\s*(?:x|vezes|parcelas?)\s+de\s*r\$', text):
         return None
     if re.search(r'(?i)\b(?:ou|versus|vs)\b', text) or re.search(r'(?i)R\$\s*[0-9][0-9.,]*\s+e\s+(?:R\$\s*)?[0-9]', text):
         return None
@@ -175,7 +187,7 @@ def parse_installment_request(text: str) -> InstallmentRequest | None:
     count_match = _INSTALLMENT_COUNT.search(text)
     if not per_part and count_match.start() < match.start():
         return None
-    if not per_part and not re.search(r'(?i)\b(?:em|a)\s*\d{1,2}\s*(?:x\b|vezes\b|parcelas?\b)', text):
+    if not per_part and not re.search(r'(?i)\b(?:em|a)\s*' + _COUNT_PATTERN + r'\s*(?:x\b|vezes\b|parcelas?\b)', text):
         return None
     return InstallmentRequest(amount, amount * count if per_part else amount,
                               amount if per_part else None, count)

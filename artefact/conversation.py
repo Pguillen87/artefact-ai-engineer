@@ -6,8 +6,9 @@ import re
 import time
 
 from .agent import Agent, CLARIFY, FALLBACK, WRITE_ISOLATION, WRITE_UNCERTAIN
-from .context import explicit_customer, explicit_product, installment_followup, next_context, order_followup, product_followup, product_installment_followup
+from .context import explicit_customer, explicit_product, installment_followup, next_context, order_followup, product_followup, product_installment_followup, product_amount_requires_clarification
 from .rendering import render_results
+from .intent import normalize, validate_catalog_intent
 from .telemetry import event, operation_id
 
 _GREETING = re.compile(r'^(oi|ol[aá]|bom dia|boa tarde|boa noite)[!. ]*$', re.I)
@@ -63,13 +64,18 @@ class ConversationAgent:
         try:
             snapshot = self.snapshot_loader() if self.snapshot_loader else self.snapshot
             explicit = explicit_product(text, snapshot)
+            comparison = bool(re.search(r'(?i)\b(?:compar\w*|versus|vs)\b', text))
+            if comparison:
+                explicit = None
+            if explicit is not None and not validate_catalog_intent('search_products', {'text': explicit['name']}, text, snapshot):
+                explicit = None
             customer_id = explicit_customer(text, snapshot)
             if customer_id is not None:
                 current = replace(current, customer_id=customer_id)
                 self._remember(self.context, chat_id, current)
             if explicit is not None:
                 role = current.amount_role
-                if current.amount is not None and explicit.get('price_brl') != current.amount:
+                if current.amount is not None and explicit.get('price_brl') != current.amount and not re.search(r'(?i)\bsimul\w*\b', text):
                     role = 'ambiguous'
                 current = replace(current, amount_role=role, product_id=explicit['product_id'],
                                   product_name=explicit['name'], origin='user')
@@ -116,6 +122,9 @@ class ConversationAgent:
             event(op, 'conversation', 'plan', 'validation', 'success')
 
             results = []
+            resolved_products = {}
+            explicitly_mentioned = [p for p in snapshot.tables['products'] if normalize(p['name']) in normalize(text)]
+            forbid_parse = current.amount_role == 'ambiguous' or product_amount_requires_clarification(text, snapshot)
             for plan in plans:
                 stage = 'tool'
                 validation_text = text
@@ -126,7 +135,8 @@ class ConversationAgent:
                     product_id = prior.product_id
                 request = installment_followup(text, prior) if plan.name == 'installment_quote' else None
                 evidence = Agent(snapshot, plan, self.review_submit).answer(
-                    validation_text, installment_request=request, product_id=product_id,
+                    validation_text, installment_request=request, forbid_installment_parse=forbid_parse,
+                    forbid_product_installments=comparison or len(explicitly_mentioned) > 1, product_id=product_id,
                     customer_id=customer_id if customer_id is not None else prior.customer_id if prior and order_followup(text) else None,
                     structured=True, correlation_id=op, count_text=text)
                 if isinstance(evidence, str):
@@ -145,13 +155,14 @@ class ConversationAgent:
                 if plan.name == 'search_products':
                     products = evidence[0]['resultado']
                     if len(products) == 1:
-                        price = products[0].get('price_brl')
-                        checkout = (products[0].get('price_quote') or {}).get('checkout_price_brl')
-                        role = current.amount_role
-                        if current.amount is not None and any(value is not None and value != current.amount for value in (price, checkout)):
-                            role = 'ambiguous'
-                        current = replace(current, amount_role=role, product_id=products[0]['product_id'], product_name=products[0]['name'], origin='catalog')
-                        self._remember(self.context, chat_id, current)
+                        resolved_products[products[0]['product_id']] = products[0]
+            if len(resolved_products) == 1 and len(explicitly_mentioned) <= 1 and not comparison:
+                product = next(iter(resolved_products.values()))
+                current = replace(current, product_id=product['product_id'], product_name=product['name'], origin='catalog')
+                self._remember(self.context, chat_id, current)
+            elif len(resolved_products) > 1:
+                current = replace(current, product_id=None, product_name=None)
+                self._remember(self.context, chat_id, current)
             if all(item.get('resultado') in (None, [], (), {}) for item in results):
                 event(op, 'conversation', 'complete', 'tool', 'empty', duration_ms=int((time.monotonic()-started)*1000))
                 return 'Não encontrei informações suficientes para essa consulta.'

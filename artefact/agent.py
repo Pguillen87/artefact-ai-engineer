@@ -11,7 +11,7 @@ import urllib.request
 from .services import Catalog, OrderService, get_policy
 from .commercial import quote_installments, extract_installment_count, parse_installment_request
 from .intent import validate_catalog_intent, validate_policy_intent
-from .context import explicit_product, name_in_text
+from .context import explicit_product, name_in_text, product_amount_requires_clarification
 from .telemetry import bind_operation, event, operation_id, reset_operation
 
 FALLBACK = 'Desculpe, não consegui consultar os dados agora. Tente novamente.'
@@ -129,7 +129,7 @@ class Agent:
     def __init__(self, snapshot, planner, review_submit=None):
         self.catalog=Catalog(snapshot); self.orders=OrderService(snapshot); self.planner=planner; self.snapshot=snapshot; self.review_submit=review_submit
 
-    def answer(self, text, *, installment_request=None, product_id=None, customer_id=None, structured=False, correlation_id=None, count_text=None):
+    def answer(self, text, *, installment_request=None, forbid_installment_parse=False, forbid_product_installments=False, product_id=None, customer_id=None, structured=False, correlation_id=None, count_text=None):
         correlation_id = correlation_id or operation_id()
         if not isinstance(text,str) or not text.strip() or len(text)>2000:
             return FALLBACK
@@ -158,6 +158,8 @@ class Agent:
                             args[key]=Decimal(args[key])
                     count=args.pop('installments',None)
                     if count is not None:
+                        if forbid_product_installments:
+                            return CLARIFY
                         if name!='search_products' or type(count) is not int or not 1 <= count <= 12 or extract_installment_count(count_text if count_text is not None else text) != count:
                             return FALLBACK
                     if name=='recommend_products':
@@ -176,7 +178,8 @@ class Agent:
                 elif name=='installment_quote' and set(args)=={'amount_brl','installments'}:
                     if not isinstance(args['amount_brl'],str) or len(args['amount_brl'])>20 or type(args['installments']) is not int:
                         return FALLBACK
-                    requested=installment_request or parse_installment_request(text)
+                    blocked = forbid_installment_parse or product_amount_requires_clarification(text, self.snapshot)
+                    requested=installment_request if blocked else installment_request or parse_installment_request(text)
                     if requested is None:
                         result={'status':'clarification'}
                     else:

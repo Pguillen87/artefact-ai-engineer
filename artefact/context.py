@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 import re
 
-from .commercial import (has_budget_context, has_order_context, money_mentions,
+from .commercial import (has_budget_context, has_explicit_total_intent, has_order_context, money_mentions,
                          extract_installment_count, parse_installment_request,
                          InstallmentRequest)
 from .intent import normalize
@@ -31,7 +31,9 @@ _PRODUCT_FOLLOWUP = re.compile(
 
 
 def installment_followup(text: str, context: ConversationContext | None) -> InstallmentRequest | None:
-    if not context or context.amount is None or context.amount_role != 'total' or not _FOLLOWUP.fullmatch(text):
+    if not context or context.amount is None or not _FOLLOWUP.fullmatch(text):
+        return None
+    if context.amount_role != 'total' and not (context.amount_role == 'stated_price' and re.search(r'(?i)\b(?:esse|este|aquele)\s+valor\b', text)):
         return None
     count = extract_installment_count(text)
     if count is None:
@@ -93,6 +95,15 @@ def explicit_product(text: str, snapshot):
     return matches[0] if len(matches) == 1 else None
 
 
+def product_amount_requires_clarification(text: str, snapshot) -> bool:
+    """A mentioned product does not establish that a stated amount is its price."""
+    spoken = normalize(text)
+    if not money_mentions(text) or has_budget_context(text) or re.search(r'\bsimul\w*\b', spoken):
+        return False
+    return any(re.search(r'(?<!\w)' + re.escape(normalize(p['name']).split()[0]) + r'(?!\w)', spoken)
+               for p in snapshot.tables['products'])
+
+
 def next_context(text: str, previous: ConversationContext | None, turn: int) -> ConversationContext:
     if previous and order_followup(text):
         return ConversationContext(turn=turn, customer_id=previous.customer_id)
@@ -114,6 +125,8 @@ def next_context(text: str, previous: ConversationContext | None, turn: int) -> 
         if amount is not None:
             spoken = normalize(text)
             role = ('budget_cap' if has_budget_context(text)
-                    else 'per_installment' if re.search(r'\bparcela\b', spoken) else 'total')
+                    else 'per_installment' if re.search(r'\bparcela\b', spoken)
+                    else 'total' if has_explicit_total_intent(text)
+                    else 'stated_price' if re.search(r'(?i)\binstrumento\s+de\s+r\$', text) else 'unknown')
             return ConversationContext(amount, role, turn=turn)
     return ConversationContext(turn=turn)
