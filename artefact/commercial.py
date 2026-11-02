@@ -148,6 +148,9 @@ def parse_installment_request(text: str) -> InstallmentRequest | None:
         return None
     before = text[:match.start()]
     per_part = bool(re.search(r'(?i)(?<![\w.,])\d{1,2}\s*(?:x|vezes|parcelas?)\s+de\s*$', before))
+    count_match = _INSTALLMENT_COUNT.search(text)
+    if not per_part and count_match.start() < match.start():
+        return None
     if not per_part and not re.search(r'(?i)\b(?:em|parcelar|parcelamento|dividir|pagar)\b', text):
         return None
     return InstallmentRequest(amount, amount * count if per_part else amount,

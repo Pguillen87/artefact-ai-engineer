@@ -61,7 +61,8 @@ class InstallmentRegressionQA(unittest.TestCase):
                 self.assertEqual(extract_installment_request('Parcelar R$ 1.200,00' + suffix + ' em 3x'), (Decimal('1200'), 3))
                 self.assertEqual(extract_installment_request('Quero pagar 3x de R$ 150,00' + suffix), (Decimal('450'), 3))
         for text in ('Parcelar R$ 150 ou R$ 200 em 3x?', 'Parcelar R$ 150 em 2x ou 3x?',
-                     'Frete de R$ 150 em 3x?', 'Pedido histórico de R$ 150 em 3x?'):
+                     'Frete de R$ 150 em 3x?', 'Pedido histórico de R$ 150 em 3x?',
+                     'Quero pagar 3x R$ 150'):
             with self.subTest(text=text): self.assertIsNone(extract_installment_request(text))
 
     def test_tool_cannot_substitute_amount_and_below_minimum_is_rejected(self):
@@ -77,6 +78,18 @@ class InstallmentRegressionQA(unittest.TestCase):
             answer=ConversationAgent(snapshot,Provider('40')).answer('Quero pagar 3x de R$ 40.',chat_id=1)
             self.assertIn('não é permitido', answer)
             self.assertIn('R$ 120,00', answer)
+
+    def test_product_installments_use_catalog_price_not_budget(self):
+        class Provider:
+            def request(self,messages):
+                return {'output':[{'type':'function_call','name':'search_products','call_id':'1',
+                    'arguments':json.dumps({'text':'Korg','installments':3})}]}
+        with TemporaryDirectory() as directory:
+            root=Path(directory); write_dataset(root); agent=ConversationAgent(load_dataset(root),Provider())
+            answer=agent.answer('Meu orçamento é R$ 900. Quanto custa Korg em 3x?',chat_id=1)
+            self.assertIn('R$ 1.014,75',answer)
+            self.assertIn('3x R$ 338,25',answer)
+            self.assertNotIn('3x R$ 300,00',answer)
 
     def test_context_is_not_shared_between_chats(self):
         class Provider:
