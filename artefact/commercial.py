@@ -130,7 +130,7 @@ def has_order_context(text: str) -> bool:
 
 
 def has_budget_context(text: str) -> bool:
-    return bool(re.search(r'(?i)\b(?:orçamento|orcamento|para gastar|posso gastar|limite de gastos?|no m[aá]ximo|menos de|abaixo de)\b|\bat[eé]\s+r\$', text))
+    return bool(re.search(r'(?i)\b(?:orçamento|orcamento|para gastar|posso gastar|limite|teto|no m[aá]ximo|menos de|abaixo de)\b|\bat[eé]\s+r\$', text))
 
 
 def extract_installment_count(text: str) -> int | None:

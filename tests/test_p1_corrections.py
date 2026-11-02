@@ -41,6 +41,12 @@ class P1Corrections(unittest.TestCase):
         for message in ('Tenho orçamento de R$ 900 em 3x.', 'Tenho até R$ 900 para gastar em 3x.'):
             self.assertNotIn('300,00', ConversationAgent(self.snapshot, self.provider).answer(message))
 
+    def test_spending_limit_is_not_a_total(self):
+        self.provider.request.side_effect = [{'output': []}, {'output': [call('installment_quote', {'amount_brl': '900', 'installments': 3})]}]
+        agent = ConversationAgent(self.snapshot, self.provider)
+        agent.answer('Meu limite é R$ 900.', chat_id=1)
+        self.assertNotIn('300,00', agent.answer('Quanto fica em 3x?', chat_id=1))
+
     def test_confirmed_total_and_written_followup(self):
         self.provider.request.side_effect = [{'output': []}, {'output': [call('installment_quote', {'amount_brl': '900', 'installments': 3})]}]
         agent = ConversationAgent(self.snapshot, self.provider)
