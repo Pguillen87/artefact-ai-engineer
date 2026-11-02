@@ -22,8 +22,8 @@ class ConversationContext:
 
 _FOLLOWUP = re.compile(
     r'(?i)^\s*(?:e\s+)?(?:(?:quanto\s+(?:ficaria|fica|seria|d[aá])\s+)?)'
-    r'(?:(?:esse|este|aquele)\s+valor\s+)?(?:em|a)\s+\d{1,2}\s*'
-    r'(?:x|vezes|parcelas?)\s*[?.!]*\s*$')
+    r'(?:(?:esse|este|aquele)\s+valor\s+)?(?:em|a)\s+(?:\d{1,2}|um|uma|duas|dois|tr[eê]s|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)\s*'
+    r'(?:x|vezes|parcelas?)(?:\s+sem\s+juros)?\s*[?.!]*\s*$')
 _PRODUCT_FOLLOWUP = re.compile(
     r'(?i)^\s*(?:e\s+)?(?:qual\s+)?(?:o\s+)?'
     r'(?:pre[cç]o|produto|promo[cç][aã]o|estoque|disponibilidade)'
@@ -34,6 +34,12 @@ def installment_followup(text: str, context: ConversationContext | None) -> Inst
     if not context or context.amount is None or context.amount_role != 'total' or not _FOLLOWUP.fullmatch(text):
         return None
     count = extract_installment_count(text)
+    if count is None:
+        names = {'um': 1, 'uma': 1, 'dois': 2, 'duas': 2, 'tres': 3, 'quatro': 4,
+                 'cinco': 5, 'seis': 6, 'sete': 7, 'oito': 8, 'nove': 9,
+                 'dez': 10, 'onze': 11, 'doze': 12}
+        count = next((value for word, value in names.items()
+                      if re.search(r'\b' + word + r'\b', normalize(text))), None)
     if count is None:
         return None
     return InstallmentRequest(context.amount, context.amount, None, count)
@@ -106,6 +112,8 @@ def next_context(text: str, previous: ConversationContext | None, turn: int) -> 
     if len(amounts) == 1:
         amount = amounts[0]
         if amount is not None:
-            role = 'per_installment' if re.search(r'(?i)\bparcela\b', text) else 'total'
+            spoken = normalize(text)
+            role = ('budget_cap' if re.search(r'\b(?:orcamento|para gastar|posso gastar|limite de gastos?)\b|\bate\s+r\$', spoken)
+                    else 'per_installment' if re.search(r'\bparcela\b', spoken) else 'total')
             return ConversationContext(amount, role, turn=turn)
     return ConversationContext(turn=turn)

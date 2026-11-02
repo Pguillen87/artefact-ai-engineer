@@ -52,6 +52,23 @@ def _money_values(text: str) -> set[Decimal]:
     return values
 
 
+def validate_policy_intent(topic: str, text: str) -> bool:
+    """Reject policy topics contradicted by an explicit topic in this turn."""
+    spoken = normalize(text)
+    patterns = {
+        'exchange': r'\b(?:troca\w*|trocar|defeito\w*)\b',
+        'warranty': r'\b(?:garantia\w*|fabricante)\b',
+        'regret': r'\b(?:arrepend\w*|desist\w*|devolu\w*|devolver)\b',
+        'shipping': r'\b(?:frete|envio|entrega|entregar)\b',
+        'installments': r'\b(?:parcel\w*|vezes|crediario)\b',
+        'pix': r'\bpix\b',
+        'hours': r'\b(?:horario\w*|funcionamento|aberto|abre|fecha)\b',
+        'contacts': r'\b(?:contato\w*|telefone|vendedor\w*|ligar)\b',
+    }
+    mentioned = {key for key, pattern in patterns.items() if re.search(pattern, spoken)}
+    return topic in mentioned if mentioned else False
+
+
 def validate_catalog_intent(name: str, args: dict, text: str, snapshot, product_id: int | None = None) -> bool:
     normalized = normalize(text)
     if name == 'promotion':
@@ -70,7 +87,9 @@ def validate_catalog_intent(name: str, args: dict, text: str, snapshot, product_
         return False
     explicit_products = [p for p in snapshot.tables['products']
                          if re.search(r'(?<!\w)' + re.escape(normalize(p['name'])) + r'(?!\w)', normalized)]
-    if any(re.search(r'\b(?:nao quero|sem|exceto)\s+' + re.escape(normalize(product['name'])) + r'(?!\w)', normalized)
+    negation = (r'(?:nao quero|nao (?:me )?(?:recomende|recomendar|indique|sugira)|'
+                r'nao gosto de|nao o|nao a|sem|exceto)\s+(?:(?:o|a)\s+)?')
+    if any(re.search(r'\b' + negation + re.escape(normalize(product['name'])) + r'(?!\w)', normalized)
            for product in explicit_products):
         return False
     query = args.get('text')
@@ -79,7 +98,7 @@ def validate_catalog_intent(name: str, args: dict, text: str, snapshot, product_
             return False
         if not _words(query).issubset(_words(text)):
             return False
-        if re.search(r'\b(?:sem|exceto|nao quero)\s+' + re.escape(normalize(query)) + r'\b', normalized):
+        if re.search(r'\b' + negation + re.escape(normalize(query)) + r'\b', normalized):
             return False
         if name == 'search_products' and not explicit_products:
             continuation = re.search(r'(?<!\w)' + re.escape(normalize(query)) + r'\s+([a-z][a-z0-9-]*)', normalized)

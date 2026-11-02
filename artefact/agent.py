@@ -10,7 +10,7 @@ import urllib.request
 
 from .services import Catalog, OrderService, get_policy
 from .commercial import quote_installments, extract_installment_count, parse_installment_request
-from .intent import validate_catalog_intent
+from .intent import validate_catalog_intent, validate_policy_intent
 from .context import explicit_product, name_in_text
 from .telemetry import bind_operation, event, operation_id, reset_operation
 
@@ -188,6 +188,8 @@ class Agent:
                             return FALLBACK
                         result=_installment_result(quote_installments(requested.total_amount,requested.count),'valor informado pelo cliente')
                 elif name=='policy' and set(args)=={'topic'} and isinstance(args['topic'],str):
+                    if not validate_policy_intent(args['topic'], text):
+                        return CLARIFY
                     result=get_policy(args['topic'])
                     if args['topic']=='contacts' and result is not None:
                         result['summary']='Demonstração: atendimento remoto (67) 3321-4500; contato da loja física/vendedores '+self.snapshot.seller_contact+'.'
@@ -203,7 +205,7 @@ class Agent:
                         continue
                     try:
                         case=self.review_submit(pid,field,reason,self.snapshot.catalog_version)
-                    except (ValueError, TypeError, OSError, TimeoutError, sqlite3.Error) as exc:
+                    except Exception as exc:
                         event(correlation_id,'review','submit','integration','uncertain',error=exc,side_effect='unknown')
                         return WRITE_UNCERTAIN
                     if type(case) is not int or case <= 0:

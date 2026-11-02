@@ -146,10 +146,12 @@ class ConversationAgent:
                         current = replace(current, amount_role=role, product_id=products[0]['product_id'], product_name=products[0]['name'], origin='catalog')
                         self._remember(self.context, chat_id, current)
             if all(item.get('resultado') in (None, [], (), {}) for item in results):
+                event(op, 'conversation', 'complete', 'tool', 'empty', duration_ms=int((time.monotonic()-started)*1000))
                 return 'Não encontrei informações suficientes para essa consulta.'
             stage = 'render'
             answer = render_results(results)
             if len(answer) > 3500:
+                event(op, 'conversation', 'complete', 'validation', 'failure', side_effect='committed' if written else 'none', duration_ms=int((time.monotonic()-started)*1000))
                 return 'A resposta é longa demais. Por favor, refine sua consulta.'
             self._remember(self.history, chat_id, (messages + [{'role': 'assistant', 'content': answer}])[-6:])
             event(op, 'conversation', 'complete', 'tool', 'success',
