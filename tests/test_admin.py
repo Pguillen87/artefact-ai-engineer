@@ -92,3 +92,32 @@ class CatalogAdminTests(unittest.TestCase):
 
     def test_missing_projection_fails_closed(self):
         with self.assertRaises((OSError,ValueError)): published_snapshot(self.root/'missing.db',self.baseline)
+
+    def test_excessive_rows_and_deep_json_are_rejected(self):
+        many=csv_bytes(*[product(str(i+10)) for i in range(1001)])
+        with self.assertRaises((ValueError,StructuralError)): self.admin.stage(many)
+        row=product();row[7]='{"x":'+('['*1200)+'0'+(']'*1200)+'}'
+        with self.assertRaises((ValueError,StructuralError)): self.admin.stage(csv_bytes(row))
+
+    def test_missing_pair_requires_explicit_initialization(self):
+        from artefact.admin import require_explicit_initialization
+        with self.assertRaises(ValueError): require_explicit_initialization(self.root/'new-admin',self.root/'new-serving',False)
+        require_explicit_initialization(self.root/'new-admin',self.root/'new-serving',True)
+        require_explicit_initialization(self.root/'admin.db',self.root/'serving.db',False)
+
+    def test_migrates_existing_admin_events_without_losing_versions(self):
+        import sqlite3
+        old=self.root/'old-admin.db'; serving=self.root/'old-serving.db'
+        con=sqlite3.connect(old)
+        con.executescript("CREATE TABLE batches(id INTEGER PRIMARY KEY,csv BLOB NOT NULL,status TEXT NOT NULL,review TEXT NOT NULL DEFAULT '',created TEXT DEFAULT CURRENT_TIMESTAMP); CREATE TABLE events(id INTEGER PRIMARY KEY,action TEXT NOT NULL,batch_id INTEGER,version_id INTEGER,created TEXT DEFAULT CURRENT_TIMESTAMP); INSERT INTO events(action) VALUES('old_event');")
+        con.commit();con.close()
+        con=sqlite3.connect(serving)
+        con.execute('CREATE TABLE versions(id INTEGER PRIMARY KEY,products BLOB NOT NULL,created TEXT DEFAULT CURRENT_TIMESTAMP)')
+        con.execute('CREATE TABLE active(id INTEGER PRIMARY KEY,version_id INTEGER NOT NULL)')
+        con.execute('INSERT INTO versions(id,products) VALUES(0,?)',(csv_bytes(),))
+        con.execute('INSERT INTO active VALUES(1,0)');con.commit();con.close()
+        migrated=CatalogAdmin(old,serving,self.baseline)
+        self.assertEqual(migrated.history()[0]['action'],'old_event')
+        self.assertEqual(migrated.versions()[0]['id'],0)
+        migrated.rollback(0,'Motivo após migração')
+        self.assertEqual(migrated.history()[-1]['reason'],'Motivo após migração')

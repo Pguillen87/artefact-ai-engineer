@@ -36,7 +36,20 @@ def _plain(value):
 
 def _validate(raw, baseline, existing=()):
     if not isinstance(raw, bytes) or len(raw) > MAX_BYTES: raise ValueError('Arquivo excede o limite de 1 MiB')
-    rows = _parse('products', raw)
+    try:
+        reader=csv.reader(io.StringIO(raw.decode('utf-8-sig'),newline=''),strict=True)
+        for line,_ in enumerate(reader):
+            if line > MAX_ROWS: raise ValueError('O lote excede 1000 produtos')
+        rows = _parse('products', raw)
+    except (UnicodeError,csv.Error,RecursionError) as exc:
+        raise StructuralError('CSV ou JSON inválido ou complexo demais') from exc
+    for row in rows:
+        stack=[(row['specs'],0)]; nodes=0
+        while stack:
+            value,depth=stack.pop();nodes+=1
+            if depth>32 or nodes>10000: raise ValueError('Especificações complexas demais')
+            if isinstance(value,dict): stack.extend((v,depth+1) for v in value.values())
+            elif isinstance(value,list): stack.extend((v,depth+1) for v in value)
     if not rows or len(rows) > MAX_ROWS: raise ValueError('O lote deve conter de 1 a 1000 produtos')
     if any(row['price_brl'].as_tuple().exponent < -2 or row['price_brl'] > 100000000 for row in rows): raise ValueError('Preço deve ter até duas casas decimais')
     categories = {row['category_id'] for row in baseline.tables['categories']}
@@ -76,6 +89,11 @@ def published_snapshot(path, baseline):
         return Snapshot(MappingProxyType(tables), issues, baseline.hashes)
     finally:
         con.close()
+
+
+def require_explicit_initialization(admin_path, serving_path, initialize):
+    if not Path(admin_path).exists() and not Path(serving_path).exists() and not initialize:
+        raise ValueError('Inicialização do catálogo exige ARTEFACT_ADMIN_INITIALIZE=1')
 
 
 class CatalogAdmin:

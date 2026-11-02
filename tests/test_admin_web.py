@@ -54,3 +54,19 @@ class WebTests(unittest.TestCase):
         self.assertEqual(len(self.admin._existing()),1)
         self.assertEqual(post('/rollback',version=0,reason='Teste sintético'),303)
         self.assertEqual(len(self.admin._existing()),0)
+
+    def test_upload_limit_malformed_multipart_and_operational_error(self):
+        from unittest.mock import patch
+        from artefact.admin import MAX_BYTES
+        headers=dict(self.auth(),Origin=f'http://127.0.0.1:{self.port}',**{'Content-Type':'multipart/form-data; boundary=x'})
+        self.assertEqual(self.request('POST','/upload',headers,b'x'*(MAX_BYTES+65537))[0],413)
+        self.assertEqual(self.request('POST','/upload',headers,b'not a multipart')[0],400)
+        with patch.object(self.admin,'batches',side_effect=__import__('sqlite3').OperationalError('private secret')):
+            status,body=self.request('GET','/',self.auth())
+            self.assertEqual(status,503);self.assertNotIn(b'private secret',body)
+
+    def test_concurrent_authenticated_requests(self):
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            statuses=list(pool.map(lambda _: self.request('GET','/',self.auth())[0],range(16)))
+        self.assertEqual(statuses,[200]*16)

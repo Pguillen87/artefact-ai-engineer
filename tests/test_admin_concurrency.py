@@ -37,9 +37,10 @@ class ConcurrencyTests(CatalogAdminTests):
             futures=[pool.submit(writer),pool.submit(reader)]
             for f in futures: f.result()
     def test_killed_writer_recovers_uncommitted_changes(self):
-        script="import sqlite3,os,sys; c=sqlite3.connect(sys.argv[1]); c.execute('BEGIN IMMEDIATE'); c.execute('UPDATE active SET version_id=99 WHERE id=1'); os._exit(0)"
-        subprocess.run([sys.executable,'-c',script,str(self.root/'serving.db')],check=True)
+        script="import sqlite3,os,sys; c=sqlite3.connect(sys.argv[1]); c.execute('ATTACH DATABASE ? AS admin',(sys.argv[2],)); c.execute('BEGIN IMMEDIATE'); c.execute('UPDATE active SET version_id=99 WHERE id=1'); c.execute(\"INSERT INTO admin.events(action) VALUES ('interrupted')\"); os._exit(0)"
+        subprocess.run([sys.executable,'-c',script,str(self.root/'serving.db'),str(self.root/'admin.db')],check=True)
         self.assertEqual(len(published_snapshot(self.root/'serving.db',self.baseline).tables['products']),1)
+        self.assertFalse(any(e['action']=='interrupted' for e in self.admin.history()))
     def test_effective_pragmas(self):
         con=self.admin._transaction()
         try:

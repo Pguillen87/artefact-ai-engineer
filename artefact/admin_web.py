@@ -14,7 +14,7 @@ import secrets
 import sqlite3
 from urllib.parse import parse_qs, urlsplit
 
-from .admin import CatalogAdmin, MAX_BYTES, _plain
+from .admin import CatalogAdmin, MAX_BYTES, _plain, require_explicit_initialization
 from .data import StructuralError, load_dataset
 
 
@@ -65,7 +65,8 @@ class Handler(BaseHTTPRequestHandler):
                 for v in self.server.admin.versions():
                     if v['active']: body+=f'<li>Versão {v["id"]} (ativa)</li>'
                     else: body+=f'<li>Versão {v["id"]}<form method="post" action="/rollback"><input type="hidden" name="csrf" value="{self.server.csrf}"><input type="hidden" name="version" value="{v["id"]}"><label>Motivo <input name="reason" maxlength="1000" required></label><button>Ativar versão</button></form></li>'
-                body+='</ul>'
+                body+='</ul><h2>Histórico administrativo</h2>'
+                for event in self.server.admin.history(): body+='<pre>'+escape(json.dumps(event,ensure_ascii=False,indent=2))+'</pre>'
             elif target.path=='/batch':
                 batch=int(parse_qs(target.query)['id'][0]); info=self.server.admin.preview(batch)
                 body=f'<h1>Lote {batch}</h1><p>Estado: {escape(info["status"])}</p><h2>Produtos a adicionar</h2>'
@@ -140,6 +141,7 @@ def main():
         data=Path(os.environ['ARTEFACT_DATA_DIR'])
         validate_paths(os.environ['ARTEFACT_ADMIN_DB'],os.environ['ARTEFACT_CATALOG_DB'],data)
         if len(os.environ.get('ARTEFACT_ADMIN_PASSWORD','')) < 16: raise ValueError('Senha administrativa insuficiente')
+        require_explicit_initialization(os.environ['ARTEFACT_ADMIN_DB'],os.environ['ARTEFACT_CATALOG_DB'],os.environ.get('ARTEFACT_ADMIN_INITIALIZE')=='1')
         baseline=load_dataset(data,verify_baseline=True)
         admin=CatalogAdmin(os.environ['ARTEFACT_ADMIN_DB'],os.environ['ARTEFACT_CATALOG_DB'],baseline)
         server=make_server(os.environ.get('ARTEFACT_ADMIN_BIND','127.0.0.1'),int(os.environ.get('ARTEFACT_ADMIN_PORT','8080')),admin,os.environ.get('ARTEFACT_ADMIN_PASSWORD',''))
