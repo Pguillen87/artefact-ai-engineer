@@ -73,6 +73,24 @@ def _connect(path):
     return con
 
 
+def _recover_existing(admin_path, serving_path):
+    """Trigger SQLite hot-journal recovery without allowing missing files to be created."""
+    con = None
+    try:
+        con = sqlite3.connect(serving_path.as_uri() + '?mode=rw', uri=True, timeout=10)
+        con.execute('ATTACH DATABASE ? AS admin', (admin_path.as_uri() + '?mode=rw',))
+        # Opening a handle alone does not force SQLite to read and recover its journals.
+        con.execute('BEGIN')
+        con.execute('SELECT count(*) FROM main.sqlite_master').fetchone()
+        con.execute('SELECT count(*) FROM admin.sqlite_master').fetchone()
+        con.commit()
+    except sqlite3.Error:
+        if con is not None: con.rollback()
+        raise sqlite3.OperationalError('Falha na recuperação dos bancos administrativos') from None
+    finally:
+        if con is not None: con.close()
+
+
 def published_snapshot(path, baseline):
     """Read one active immutable version; never opens the administration database."""
     path = Path(path)
@@ -105,6 +123,7 @@ class CatalogAdmin:
         if self.admin_path.exists() != self.serving_path.exists(): raise ValueError('Um dos bancos persistentes está ausente')
         existing = self.admin_path.exists()
         if existing:
+            _recover_existing(self.admin_path, self.serving_path)
             for path, tables in ((self.admin_path, {'batches','events'}),(self.serving_path, {'versions','active'})):
                 check=sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)
                 try:
