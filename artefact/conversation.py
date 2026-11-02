@@ -31,7 +31,12 @@ class ConversationAgent:
             if not isinstance(output,list): return FALLBACK
             calls=[x for x in output if isinstance(x,dict) and x.get('type')=='function_call']
             if not calls:
-                return 'Posso ajudar com produtos, pedidos e políticas da loja. O que você gostaria de saber?'
+                answer='Posso ajudar com produtos, pedidos e políticas da loja. O que você gostaria de saber?'
+                if chat_id is not None:
+                    self.history[chat_id]=(messages+[{'role':'assistant','content':answer}])[-6:]
+                    self.history.move_to_end(chat_id)
+                    if len(self.history)>100: self.history.popitem(last=False)
+                return answer
             if len(calls)>3: return FALLBACK
             seen=set();results=[]
             for call in calls:
@@ -45,7 +50,14 @@ class ConversationAgent:
                 seen.add(signature)
                 class SinglePlan:
                     def plan(self,_): return [(name,args)]
-                evidence=Agent(snapshot,SinglePlan(),self.review_submit).answer(text if name=='request_technical_review' else user_evidence)
+                validation_text = text if name in ('request_technical_review','installment_quote') else user_evidence
+                if name == 'installment_quote' and re.fullmatch(r'(?i)\s*(?:e\s+)?(?:quanto\s+(?:ficaria|fica|seria|d[aá])\s+)?(?:esse|este|aquele)\s+valor\s+(?:em|a)\s+\d{1,2}\s*(?:x|vezes|parcelas?)\s*[?.!]*\s*', text):
+                    prior_users = [m.get('content','') for m in previous if m.get('role') == 'user']
+                    if prior_users:
+                        validation_text = str(prior_users[-1]) + ' ' + text
+                if name == 'search_products' and 'installments' in args:
+                    validation_text = text
+                evidence=Agent(snapshot,SinglePlan(),self.review_submit).answer(validation_text)
                 if evidence==FALLBACK: return FALLBACK
                 results.append({'type':'function_call_output','call_id':call_id,'output':evidence})
             if all(all(item.get('resultado') in (None, [], {}) for item in json.loads(result['output'])) for result in results):

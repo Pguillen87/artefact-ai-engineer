@@ -120,7 +120,15 @@ def extract_installment_count(text: str) -> int | None:
     return count if 1 <= count <= 12 else None
 
 
-def extract_installment_request(text: str) -> tuple[Decimal, int] | None:
+@dataclass(frozen=True)
+class InstallmentRequest:
+    stated_amount: Decimal
+    total_amount: Decimal
+    per_installment_amount: Decimal | None
+    count: int
+
+
+def parse_installment_request(text: str) -> InstallmentRequest | None:
     """Read one explicit BRL amount and one count; refuse order-history or ambiguous amounts."""
     if not isinstance(text, str) or _ORDER_TOTAL_CONTEXT.search(text):
         return None
@@ -132,7 +140,20 @@ def extract_installment_request(text: str) -> tuple[Decimal, int] | None:
     nearby = text[max(0, match.start() - 30):min(len(text), match.end() + 30)]
     if re.search(r'(?i)frete|envio|entrega', nearby) or _PER_INSTALLMENT_CONTEXT.search(nearby):
         return None
-    amount = _parse_brl_token(match.group(1))
+    token = match.group(1)
+    if token.endswith('.') and not token.endswith('..'):
+        token = token[:-1]
+    amount = _parse_brl_token(token)
     if amount is None:
         return None
-    return amount, count
+    before = text[:match.start()]
+    per_part = bool(re.search(r'(?i)(?<![\w.,])\d{1,2}\s*(?:x|vezes|parcelas?)\s+de\s*$', before))
+    if not per_part and not re.search(r'(?i)\b(?:em|parcelar|parcelamento|dividir|pagar)\b', text):
+        return None
+    return InstallmentRequest(amount, amount * count if per_part else amount,
+                              amount if per_part else None, count)
+
+
+def extract_installment_request(text: str) -> tuple[Decimal, int] | None:
+    request = parse_installment_request(text)
+    return (request.total_amount, request.count) if request else None

@@ -7,7 +7,7 @@ import urllib.error
 import urllib.request
 
 from .services import Catalog, OrderService, get_policy
-from .commercial import quote_installments, extract_installment_count, extract_installment_request
+from .commercial import quote_installments, extract_installment_count, parse_installment_request
 
 FALLBACK = 'Desculpe, não consegui consultar os dados agora. Tente novamente.'
 TOOLS = [
@@ -154,7 +154,7 @@ class Agent:
                 elif name=='installment_quote' and set(args)=={'amount_brl','installments'}:
                     if not isinstance(args['amount_brl'],str) or len(args['amount_brl'])>20 or type(args['installments']) is not int:
                         return FALLBACK
-                    requested=extract_installment_request(text)
+                    requested=parse_installment_request(text)
                     if requested is None:
                         result={'status':'clarification'}
                     else:
@@ -162,9 +162,9 @@ class Agent:
                             supplied=Decimal(args['amount_brl'])
                         except InvalidOperation:
                             return FALLBACK
-                        if not supplied.is_finite() or supplied != requested[0] or args['installments'] != requested[1]:
+                        if not supplied.is_finite() or supplied != requested.stated_amount or args['installments'] != requested.count:
                             return FALLBACK
-                        result=_installment_result(quote_installments(requested[0],requested[1]),'valor informado pelo cliente')
+                        result=_installment_result(quote_installments(requested.total_amount,requested.count),'valor informado pelo cliente')
                 elif name=='policy' and set(args)=={'topic'} and isinstance(args['topic'],str):
                     result=get_policy(args['topic'])
                     if args['topic']=='contacts' and result is not None:
