@@ -2,6 +2,8 @@
 from decimal import Decimal
 import unicodedata
 
+from .commercial import pix_price, promotion_price
+
 
 def _name(value):
     return ' '.join(unicodedata.normalize('NFC', value).casefold().split())
@@ -17,12 +19,42 @@ class Catalog:
             return None
         conflicts = {i.field for i in self._snapshot.issues if i.product_id == product_id}
         specs = {k: v for k, v in product['specs'].items() if f'specs.{k}' not in conflicts}
+        available = product['status'] == 'active' and product['stock_quantity'] > 0
         # A brand or category conflict makes the free-text description unsafe to assert.
-        return {'product_id':product_id, 'name':product['name'], 'price_brl':product['price_brl'],
+        return {'product_id':product_id, 'name':product['name'], 'price_brl':product.get('price_brl'),
                 'stock_quantity':product['stock_quantity'], 'status':product['status'],
-                'available':product['status'] == 'active' and product['stock_quantity'] > 0,
+                'available':available,
                 'description':None if conflicts else product['description'], 'specs':specs,
-                'review_fields':tuple(sorted(conflicts)), 'freshness':'snapshot_unknown'}
+                'review_fields':tuple(sorted(conflicts)), 'freshness':'snapshot_unknown',
+                'catalog_version':self._snapshot.catalog_version,
+                'price_quote':self._price_quote(product, available)}
+
+    def _price_quote(self, product, available):
+        price = product.get('price_brl')
+        freshness = 'snapshot_unknown'
+        source = {'source':'catalog_snapshot','catalog_version':self._snapshot.catalog_version}
+        if not isinstance(price, Decimal) or not price.is_finite() or price < 0 or price != price.quantize(Decimal('0.01')):
+            return {'status':'missing_price', 'price_brl':None, 'discount_percent':None,
+                    'promotional_price_brl':None, 'pix_price_brl':None, 'checkout_price_brl':None,
+                    'freshness':freshness, **source}
+        active = [p for p in self._snapshot.tables['promotions']
+                  if p['product_id'] == product['product_id'] and p['is_active']]
+        result = {'price_brl':price, 'discount_percent':None, 'promotional_price_brl':None,
+                  'pix_price_brl':None, 'checkout_price_brl':None, 'freshness':freshness, **source}
+        if not available:
+            return {'status':'unavailable', **result}
+        if len(active) > 1:
+            return {'status':'ambiguous', **result}
+        if active:
+            discount = active[0].get('discount_percent')
+            try:
+                amount = promotion_price(price, discount)
+            except ValueError:
+                return {'status':'ambiguous', **result}
+            return {'status':'active_in_snapshot', **result, 'discount_percent':discount,
+                    'promotional_price_brl':amount, 'checkout_price_brl':amount}
+        return {'status':'none_available', **result, 'pix_price_brl':pix_price(price, False),
+                'checkout_price_brl':price}
 
     def search(self, text='', *, category=None, min_price=None, max_price=None, available_only=False, limit=20):
         query = _name(text)
@@ -53,13 +85,12 @@ class Catalog:
         product = self.product(product_id)
         if product is None:
             return None
-        active = [p for p in self._snapshot.tables['promotions'] if p['product_id'] == product_id and p['is_active']]
-        if len(active) > 1:
-            return {'status':'ambiguous', 'freshness':'snapshot_unknown'}
-        if not active or not product['available']:
-            return {'status':'none_available', 'freshness':'snapshot_unknown'}
-        return {'status':'active_in_snapshot','discount_percent':active[0]['discount_percent'],
-                'freshness':'snapshot_unknown'}
+        quote = dict(product['price_quote'])
+        if quote['status']=='unavailable':
+            quote['status']='none_available'
+        quote.update({'product_id':product_id, 'name':product['name'], 'available':product['available'],
+                      'stock_quantity':product['stock_quantity']})
+        return quote
 
 
 class OrderService:
@@ -94,8 +125,9 @@ _POLICIES = {
     'installments': {'summary':'Parcelas sem juros: piso de R$50 em 1–3x, R$80 em 4–6x e R$100 em 7–12x.', 'source':'ARTEFACT-11, decisão humana da demonstração'},
     'pix': {'summary':'Desconto de 5% no Pix não acumula com promoção.', 'source':'ARTEFACT-11, decisão humana da demonstração'},
     'defect': {'summary':'Troca comercial por defeito até 30 dias da compra; depois orientar garantia e fabricante, sem negar a garantia legal de 90 dias a partir do recebimento.', 'source':'ARTEFACT-11, decisão humana da demonstração'},
-    'exchange': {'summary':'Troca comercial por defeito até 30 dias da compra; não pressupor troca imediata.', 'source':'ARTEFACT-11, decisão humana da demonstração'},
-    'warranty': {'summary':'Garantia legal de 90 dias a partir do recebimento; após o prazo comercial, orientar fabricante e possível intermediação da loja.', 'source':'ARTEFACT-11, decisão humana da demonstração'},
+    'exchange': {'summary':'Troca comercial por defeito até 30 dias da compra, sujeita à avaliação. Depois, orientar o acionamento do fabricante e a possível intermediação da loja, sem negar a garantia legal de 90 dias a partir do recebimento.', 'source':'ARTEFACT-11, decisão humana da demonstração'},
+    'warranty': {'summary':'Há garantia legal de 90 dias a partir do recebimento e podem existir garantias adicionais do fabricante. O prazo específico da garantia contratual depende do certificado correspondente ao produto; sem essa evidência não afirmo dois anos de cobertura. O fim de um prazo comercial não elimina direitos legais aplicáveis.', 'source':'ARTEFACT-11, decisão humana da demonstração; ARTEFACT-12 H06'},
+    'regret': {'summary':'Para compras online, é possível solicitar o arrependimento em até 7 dias corridos após o recebimento, conforme a regra aprovada para esta demonstração. Esse prazo é para solicitar orientação; não confirma que uma devolução foi aprovada ou iniciada. A data de recebimento e as condições do caso precisam ser confirmadas com a loja.', 'source':'ARTEFACT-12 H01 e interpretação aprovada pelo usuário nesta missão'},
     'hours': {'summary':'No sábado, expediente até 13h; domingos e feriados fechados. Demais horários não confirmados neste resumo.', 'source':'ARTEFACT-12, casos A03 e A04'},
     'contacts': {'summary':'Demonstração: atendimento remoto (67) 3321-4500; contato inicial da loja física/vendedores (67) 3341-4444.', 'source':'ARTEFACT-11, decisão humana da demonstração'},
 }
