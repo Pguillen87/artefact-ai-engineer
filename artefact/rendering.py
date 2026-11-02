@@ -24,6 +24,9 @@ def render_results(results):
                 if item.get('review_fields'):
                     lines.append('Há detalhes técnicos que precisam de confirmação com um vendedor.')
             if data: lines.append('Preço e estoque são do cadastro; a data de atualização não está informada.')
+        elif name=='request_technical_review':
+            if not isinstance(data,dict) or data.get('registered') is not True or type(data.get('case_id')) is not int: raise ValueError('invalid review')
+            lines.append('Sua solicitação de revisão técnica foi registrada para análise.')
         elif name=='orders':
             if not isinstance(data,list): raise ValueError('invalid orders')
             for order in data:

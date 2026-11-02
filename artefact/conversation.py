@@ -11,8 +11,8 @@ from .rendering import render_results
 _GREETING=re.compile(r'^(oi|ol[aá]|bom dia|boa tarde|boa noite)[!. ]*$',re.I)
 
 class ConversationAgent:
-    def __init__(self,snapshot,provider,*,snapshot_loader=None):
-        self.snapshot=snapshot;self.provider=provider;self.snapshot_loader=snapshot_loader;self.history=OrderedDict()
+    def __init__(self,snapshot,provider,*,snapshot_loader=None,review_submit=None):
+        self.snapshot=snapshot;self.provider=provider;self.snapshot_loader=snapshot_loader;self.review_submit=review_submit;self.history=OrderedDict()
 
     def answer(self,text,chat_id=None):
         if not isinstance(text,str) or not text.strip() or len(text)>2000:
@@ -45,7 +45,7 @@ class ConversationAgent:
                 seen.add(signature)
                 class SinglePlan:
                     def plan(self,_): return [(name,args)]
-                evidence=Agent(snapshot,SinglePlan()).answer(user_evidence)
+                evidence=Agent(snapshot,SinglePlan(),self.review_submit).answer(text if name=='request_technical_review' else user_evidence)
                 if evidence==FALLBACK: return FALLBACK
                 results.append({'type':'function_call_output','call_id':call_id,'output':evidence})
             if all(all(item.get('resultado') in (None, [], {}) for item in json.loads(result['output'])) for result in results):

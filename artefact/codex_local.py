@@ -33,7 +33,7 @@ class CodexQuota:
         with closing(sqlite3.connect(self.path)) as db:
             return db.execute('SELECT calls FROM codex_usage WHERE id=1').fetchone()[0]
 
-_FIELDS={'text':'string','category':'string','min_price':'string','max_price':'string','available_only':'boolean','product_id':'integer','topic':'string','full_name':'string'}
+_FIELDS={'field':'string','reason':'string','text':'string','category':'string','min_price':'string','max_price':'string','available_only':'boolean','product_id':'integer','topic':'string','full_name':'string'}
 _ALLOWED={item['name']:set(item['parameters']['properties']) for item in TOOLS}
 _REQUIRED={item['name']:set(item['parameters'].get('required',[])) for item in TOOLS}
 def _tool_schema(item):

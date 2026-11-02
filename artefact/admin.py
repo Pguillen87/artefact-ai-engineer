@@ -106,7 +106,7 @@ def published_snapshot(path, baseline):
     con = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=10)
     try:
         con.execute('BEGIN')
-        row = con.execute('SELECT v.products FROM active a JOIN versions v ON v.id=a.version_id WHERE a.id=1').fetchone()
+        row = con.execute('SELECT v.products,v.id FROM active a JOIN versions v ON v.id=a.version_id WHERE a.id=1').fetchone()
         if row is None: raise ValueError('Catálogo publicado inválido')
         exists=con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='public_settings'").fetchone()
         setting=con.execute("SELECT value FROM public_settings WHERE key='seller_contact'").fetchone() if exists else None
@@ -115,7 +115,7 @@ def published_snapshot(path, baseline):
         tables = dict(baseline.tables)
         tables['products'] = tuple(baseline.tables['products']) + tuple(_freeze(p) for p in products)
         issues = baseline.issues + _scan(products, baseline.tables['categories'])
-        return Snapshot(MappingProxyType(tables), issues, baseline.hashes, contact)
+        return Snapshot(MappingProxyType(tables), issues, baseline.hashes, contact, row[1])
     finally:
         con.close()
 
@@ -152,6 +152,7 @@ class CatalogAdmin:
             if 'reason' not in columns: con.execute("ALTER TABLE events ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
             columns={r[1] for r in con.execute('PRAGMA table_info(batches)')}
             if 'approved_hash' not in columns: con.execute("ALTER TABLE batches ADD COLUMN approved_hash TEXT NOT NULL DEFAULT ''")
+            con.execute("CREATE TABLE IF NOT EXISTS technical_reviews (id INTEGER PRIMARY KEY, product_id INTEGER NOT NULL, field TEXT NOT NULL, reason TEXT NOT NULL, catalog_version INTEGER NOT NULL, status TEXT NOT NULL, created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
             con.execute('CREATE TABLE IF NOT EXISTS decisions (batch_id INTEGER NOT NULL REFERENCES batches(id), issue_id TEXT NOT NULL, evidence TEXT NOT NULL, justification TEXT NOT NULL, created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(batch_id,issue_id))')
         with _connect(self.serving_path) as con:
             con.execute('CREATE TABLE IF NOT EXISTS public_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
@@ -159,6 +160,35 @@ class CatalogAdmin:
             con.execute('CREATE TABLE IF NOT EXISTS active (id INTEGER PRIMARY KEY CHECK(id=1), version_id INTEGER NOT NULL REFERENCES versions(id))')
             con.execute('INSERT OR IGNORE INTO versions(id,products) VALUES(0,?)', (_encode_products([]),))
             con.execute('INSERT OR IGNORE INTO active(id,version_id) VALUES(1,0)')
+
+    def create_review(self, product_id, field, reason, catalog_version):
+        allowed={'brand','category_id','specs.keys','specs.strings'}
+        if type(product_id) is not int or product_id <= 0 or type(catalog_version) is not int or catalog_version < 0 or field not in allowed or reason != 'inconsistencia_catalogo':
+            raise ValueError('Solicitação técnica inválida')
+        con=self._transaction()
+        try:
+            row=con.execute('SELECT v.id,v.products FROM active a JOIN versions v ON v.id=a.version_id WHERE a.id=1').fetchone()
+            if row is None or row[0] != catalog_version: raise ValueError('Versão do catálogo mudou')
+            products=list(self.baseline.tables['products']) + _parse('products',row[1])
+            if not any(p['product_id']==product_id for p in products): raise ValueError('Produto inexistente')
+            if not any(i.product_id==product_id and i.field==field for i in _scan(products,self.baseline.tables['categories'])):
+                raise ValueError('Campo sem conflito registrado')
+            case=con.execute("INSERT INTO admin.technical_reviews(product_id,field,reason,catalog_version,status) VALUES(?,?,?,?, 'open')",(product_id,field,reason,catalog_version)).lastrowid
+            con.commit();return case
+        except BaseException:
+            con.rollback();raise
+        finally: con.close()
+
+    def review_cases(self):
+        with _connect(self.admin_path) as con:
+            keys=('id','product_id','field','reason','catalog_version','status','created','updated')
+            return [dict(zip(keys,r)) for r in con.execute('SELECT id,product_id,field,reason,catalog_version,status,created,updated FROM technical_reviews ORDER BY id DESC LIMIT 100')]
+
+    def complete_review(self, case):
+        if type(case) is not int or case <= 0: raise ValueError('Caso inválido')
+        with _connect(self.admin_path) as con:
+            result=con.execute("UPDATE technical_reviews SET status='completed',updated=CURRENT_TIMESTAMP WHERE id=? AND status='open'",(case,))
+            if result.rowcount != 1: raise ValueError('Caso inexistente ou concluído')
 
     def seller_contact(self):
         with _connect(self.serving_path) as con:
