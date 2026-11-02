@@ -9,6 +9,7 @@ import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import sqlite3
@@ -18,10 +19,11 @@ from .admin import CatalogAdmin, MAX_BYTES, _plain, require_explicit_initializat
 from .data import StructuralError, load_dataset
 
 
-def make_server(host, port, admin, password):
+def make_server(host, port, admin, password, review_token=None):
     if not password or len(password) < 16: raise ValueError('ARTEFACT_ADMIN_PASSWORD deve ter ao menos 16 caracteres')
     server=ThreadingHTTPServer((host,port),Handler)
-    server.admin=admin; server.password=password; server.csrf=secrets.token_urlsafe(32)
+    if review_token and not re.fullmatch(r'[A-Za-z0-9_-]{32,128}',review_token): raise ValueError('Token da fila inválido')
+    server.admin=admin; server.password=password; server.csrf=secrets.token_urlsafe(32); server.review_token=review_token
     return server
 
 
@@ -65,7 +67,15 @@ class Handler(BaseHTTPRequestHandler):
                 for v in self.server.admin.versions():
                     if v['active']: body+=f'<li>Versão {v["id"]} (ativa)</li>'
                     else: body+=f'<li>Versão {v["id"]}<form method="post" action="/rollback"><input type="hidden" name="csrf" value="{self.server.csrf}"><input type="hidden" name="version" value="{v["id"]}"><label>Motivo <input name="reason" maxlength="1000" required></label><button>Ativar versão</button></form></li>'
-                body+='</ul><h2>Histórico administrativo</h2>'
+                body+='</ul><h2>Contato de vendedores</h2>'
+                contact=escape(self.server.admin.seller_contact(),quote=True)
+                body+=f'<p>Contato atual: {contact}</p><form method="post" action="/seller-contact"><input type="hidden" name="csrf" value="{self.server.csrf}"><label>Contato <input name="contact" value="{contact}" maxlength="16" required></label><button>Salvar contato</button></form>'
+                body+=self._form('/seller-contact-reset',{},'Restaurar contato padrão')
+                body+='<h2>Dúvidas técnicas</h2>'
+                for case in self.server.admin.review_cases():
+                    body+='<pre>'+escape(json.dumps(case,ensure_ascii=False,indent=2))+'</pre>'
+                    if case['status']=='open': body+=self._form('/review-complete',{'case':case['id']},'Concluir caso')
+                body+='<h2>Histórico administrativo</h2>'
                 for event in self.server.admin.history(): body+='<pre>'+escape(json.dumps(event,ensure_ascii=False,indent=2))+'</pre>'
             elif target.path=='/batch':
                 batch=int(parse_qs(target.query)['id'][0]); info=self.server.admin.preview(batch)
@@ -86,7 +96,23 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200,'<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>Artefact Admin</title><body>'+body+'</body></html>')
         except (sqlite3.Error,OSError): self._send(503,'Serviço temporariamente indisponível')
         except (ValueError,KeyError,IndexError,StructuralError): self._send(400,'Consulta inválida')
+    def _review_request(self):
+        token=self.server.review_token
+        supplied=self.headers.get('Authorization','')
+        if not token or not hmac.compare_digest(supplied.encode(),('Bearer '+token).encode()):
+            self._send(401,'Não autorizado');return
+        try:
+            size=int(self.headers.get('Content-Length','-1'))
+            if size < 1 or size > 1024 or self.headers.get('Content-Type') != 'application/json': raise ValueError()
+            payload=json.loads(self.rfile.read(size).decode('utf-8'))
+            if not isinstance(payload,dict) or set(payload)!={'product_id','field','reason','catalog_version'}: raise ValueError()
+            case=self.server.admin.create_review(**payload)
+            self._send(201,json.dumps({'id':case}))
+        except (sqlite3.Error,OSError): self._send(503,'Serviço temporariamente indisponível')
+        except (ValueError,TypeError,UnicodeError): self._send(400,'Solicitação inválida')
+
     def do_POST(self):
+        if self.path=='/internal/reviews': self._review_request();return
         if not self._guard(): return
         if self.headers.get('Origin') != 'http://'+self.headers.get('Host',''):
             self._send(403,'Origem inválida');return
@@ -120,6 +146,12 @@ class Handler(BaseHTTPRequestHandler):
                 batch=int(fields['batch']);self.server.admin.approve(batch,fields['review']);location=f'/batch?id={batch}'
             elif self.path=='/publish':
                 self.server.admin.publish(int(fields['batch']));location='/'
+            elif self.path=='/review-complete':
+                self.server.admin.complete_review(int(fields['case']));location='/'
+            elif self.path=='/seller-contact':
+                self.server.admin.set_seller_contact(fields['contact']);location='/'
+            elif self.path=='/seller-contact-reset':
+                self.server.admin.reset_seller_contact();location='/'
             elif self.path=='/rollback':
                 self.server.admin.rollback(int(fields['version']),fields['reason']);location='/'
             else: self._send(404,'Não encontrado');return
@@ -144,7 +176,7 @@ def main():
         require_explicit_initialization(os.environ['ARTEFACT_ADMIN_DB'],os.environ['ARTEFACT_CATALOG_DB'],os.environ.get('ARTEFACT_ADMIN_INITIALIZE')=='1')
         baseline=load_dataset(data,verify_baseline=True)
         admin=CatalogAdmin(os.environ['ARTEFACT_ADMIN_DB'],os.environ['ARTEFACT_CATALOG_DB'],baseline)
-        server=make_server(os.environ.get('ARTEFACT_ADMIN_BIND','127.0.0.1'),int(os.environ.get('ARTEFACT_ADMIN_PORT','8080')),admin,os.environ.get('ARTEFACT_ADMIN_PASSWORD',''))
+        server=make_server(os.environ.get('ARTEFACT_ADMIN_BIND','127.0.0.1'),int(os.environ.get('ARTEFACT_ADMIN_PORT','8080')),admin,os.environ.get('ARTEFACT_ADMIN_PASSWORD',''),os.environ.get('ARTEFACT_REVIEW_TOKEN'))
         server.serve_forever()
     except (KeyError,ValueError,OSError,sqlite3.Error,StructuralError) as exc:
         print('Administração não iniciada:',type(exc).__name__)

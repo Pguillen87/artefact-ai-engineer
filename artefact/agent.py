@@ -1,6 +1,8 @@
 """Tool-constrained demo agent and injectable Telegram/Responses adapters."""
 from decimal import Decimal, InvalidOperation
 import json
+import re
+import unicodedata
 import urllib.error
 import urllib.request
 
@@ -16,9 +18,42 @@ TOOLS = [
   'parameters':{'type':'object','properties':{'product_id':{'type':'integer'}},'required':['product_id'],'additionalProperties':False}},
  {'type':'function','name':'policy','description':'Consulta política de demonstração.',
   'parameters':{'type':'object','properties':{'topic':{'type':'string','enum':['shipping','installments','pix','exchange','warranty','hours','contacts']}},'required':['topic'],'additionalProperties':False}},
+ {'type':'function','name':'request_technical_review','description':'Registra revisão de conflito técnico existente somente a pedido explícito do cliente.',
+  'parameters':{'type':'object','properties':{'product_id':{'type':'integer'},'field':{'type':'string','enum':['brand','category_id','specs.keys','specs.strings']},'reason':{'type':'string','enum':['inconsistencia_catalogo']}},'required':['product_id','field','reason'],'additionalProperties':False}},
  {'type':'function','name':'orders','description':'Consulta pedidos fictícios pelo nome completo informado pelo cliente.',
   'parameters':{'type':'object','properties':{'full_name':{'type':'string'}},'required':['full_name'],'additionalProperties':False}},
 ]
+
+
+def _review_intent(text, product, selected_field, all_products):
+    """Conservative authorization for a structured write; never infer customer consent."""
+    normalized=''.join(c for c in unicodedata.normalize('NFKD',text.casefold()) if not unicodedata.combining(c))
+    if '?' in normalized or re.search(r'\b(nao|nunca|sem|evite|proibido|como|explica|explicar|posso|possivel|se|quando|depois|apos|antes|aguarde|espera|aguardar|esperar|ate|futuramente|mediante|sujeito|sujeita|condicao|condicionado|condicionada|salvo|exceto|talvez)\b',normalized):
+        return 'intent'
+    if re.search(r'\b(?:caso\s+(?:eu|voce|ele|ela|nos|eles|elas)|assim\s+que|desde\s+que|contanto\s+que)\b',normalized):
+        return 'intent'
+    if not re.match(r'^\s*(?:(?:por favor|por gentileza)[, ]+)?(?:registre|abra|solicite|quero registrar|quero abrir|gostaria de registrar|gostaria de abrir)\b',normalized):
+        return 'intent'
+    if not re.search(r'\b(revisao|analise|verificacao|caso)\b',normalized): return 'intent'
+    # Product IDs count only when explicitly labelled; unrelated order IDs and money do not.
+    references=re.findall(r'\bproduto\s+(?:id\s*)?(?:n[ºo.]\s*)?(\d+)\b(?![.,]\d)(?!\s*reais\b)',normalized)
+    if re.search(r'\bprodutos\b',normalized) or re.search(r'\bproduto\s+\d+\s+e\s+\d+\b',normalized): return 'product'
+    names=[]
+    for row in all_products:
+        label=''.join(c for c in unicodedata.normalize('NFKD',row['name'].casefold()) if not unicodedata.combining(c))
+        if len(label)>=3 and label in normalized: names.append((row['product_id'],label))
+    identifiers={int(value) for value in references} | {item[0] for item in names}
+    if identifiers != {product['product_id']}: return 'product'
+    # Product names can contain field words; they do not themselves specify the issue.
+    for _,label in names: normalized=normalized.replace(label,' ')
+    aliases={'brand':r'\b(marca|fabricante)\b','category_id':r'\b(categoria)\b','specs.keys':r'\b(teclas|teclado de teclas)\b','specs.strings':r'\b(cordas)\b'}
+    mentioned={field for field,pattern in aliases.items() if re.search(pattern,normalized)}
+    conflicts=set(product['review_fields'])
+    if mentioned:
+        if mentioned != {selected_field} or selected_field not in conflicts: return 'field'
+    elif len(conflicts)!=1 or selected_field not in conflicts:
+        return 'field'
+    return None
 
 class OpenAIPlanner:
     """Select allowlisted read-only functions; rendering is deterministic."""
@@ -51,8 +86,8 @@ class OpenAIPlanner:
 
 
 class Agent:
-    def __init__(self, snapshot, planner):
-        self.catalog=Catalog(snapshot); self.orders=OrderService(snapshot); self.planner=planner
+    def __init__(self, snapshot, planner, review_submit=None):
+        self.catalog=Catalog(snapshot); self.orders=OrderService(snapshot); self.planner=planner; self.snapshot=snapshot; self.review_submit=review_submit
 
     def answer(self, text):
         if not isinstance(text,str) or not text.strip() or len(text)>2000:
@@ -80,6 +115,21 @@ class Agent:
                     result=self.catalog.promotion(args['product_id'])
                 elif name=='policy' and set(args)=={'topic'} and isinstance(args['topic'],str):
                     result=get_policy(args['topic'])
+                    if args['topic']=='contacts' and result is not None:
+                        result['summary']='Demonstração: atendimento remoto (67) 3321-4500; contato da loja física/vendedores '+self.snapshot.seller_contact+'.'
+                elif name=='request_technical_review' and set(args)=={'product_id','field','reason'}:
+                    pid=args['product_id']; field=args['field']; reason=args['reason']
+                    if self.review_submit is None or type(pid) is not int or not isinstance(field,str) or not isinstance(reason,str): return FALLBACK
+                    product=self.catalog.product(pid)
+                    if not product or field not in product['review_fields'] or reason!='inconsistencia_catalogo': return FALLBACK
+                    clarification=_review_intent(text,product,field,self.snapshot.tables['products'])
+                    if clarification:
+                        result={'clarification':clarification}
+                        results.append({'consulta':name,'resultado':result})
+                        continue
+                    case=self.review_submit(pid,field,reason,self.snapshot.catalog_version)
+                    if type(case) is not int or case <= 0: return FALLBACK
+                    result={'registered':True,'case_id':case}
                 elif name=='orders' and set(args)=={'full_name'} and isinstance(args['full_name'],str) and 1<len(args['full_name'])<=200:
                     # Name must have been supplied by the user, not invented by the model.
                     if args['full_name'].casefold() not in text.casefold(): return FALLBACK

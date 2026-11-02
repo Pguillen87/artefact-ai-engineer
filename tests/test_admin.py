@@ -131,3 +131,58 @@ class CatalogAdminTests(unittest.TestCase):
         db.close()
         with self.assertRaises(ValueError): self.admin.publish(batch)
         self.assertEqual(len(published_snapshot(self.root/'serving.db',self.baseline).tables['products']),1)
+
+    def test_seller_contact_settings_are_public_audited_and_persistent(self):
+        from unittest.mock import Mock
+        from artefact.conversation import ConversationAgent
+        provider=Mock();provider.request.return_value={'output':[{'type':'function_call','name':'policy','arguments':json.dumps({'topic':'contacts'}),'call_id':'x'}]}
+        def answer():
+            snap=published_snapshot(self.root/'serving.db',self.baseline)
+            return ConversationAgent(snap,provider).answer('Qual o contato da loja?')
+        self.assertIn('(67) 3341-4444',answer());self.assertIn('(67) 3321-4500',answer())
+        for bad in ('', 'abc', '(67) 1234-5678 ext 1', '<script>'):
+            with self.assertRaises(ValueError): self.admin.set_seller_contact(bad)
+        self.admin.set_seller_contact('(67) 99999-1234')
+        self.assertIn('(67) 99999-1234',answer());self.assertIn('(67) 3321-4500',answer())
+        restarted=CatalogAdmin(self.root/'admin.db',self.root/'serving.db',self.baseline)
+        self.assertEqual(restarted.seller_contact(),'(67) 99999-1234')
+        restarted.reset_seller_contact()
+        self.assertIn('(67) 3341-4444',answer())
+        self.assertEqual([e['action'] for e in restarted.history()].count('seller_contact'),2)
+
+    def test_technical_review_queue_validates_and_tracks_minimal_data(self):
+        batch=self.admin.stage(csv_bytes(product()));self.accept_all(batch);self.admin.approve(batch,'revisto');v=self.admin.publish(batch)
+        with self.assertRaises(ValueError): self.admin.create_review(2,'specs.keys','inconsistencia_catalogo',0)
+        with self.assertRaises(ValueError): self.admin.create_review(2,'secret;drop','inconsistencia_catalogo',v)
+        with self.assertRaises(ValueError): self.admin.create_review(999,'specs.keys','inconsistencia_catalogo',v)
+        case=self.admin.create_review(2,'specs.keys','inconsistencia_catalogo',v)
+        restarted=CatalogAdmin(self.root/'admin.db',self.root/'serving.db',self.baseline)
+        self.assertEqual(restarted.review_cases()[0]['id'],case)
+        self.assertEqual(restarted.review_cases()[0]['status'],'open')
+        restarted.complete_review(case)
+        self.assertEqual(restarted.review_cases()[0]['status'],'completed')
+        with self.assertRaises(ValueError): restarted.complete_review(case)
+
+    def test_agent_requests_review_only_after_explicit_request_and_persistence(self):
+        from unittest.mock import Mock
+        from artefact.conversation import ConversationAgent
+        batch=self.admin.stage(csv_bytes(product()));self.accept_all(batch);self.admin.approve(batch,'ok');version=self.admin.publish(batch)
+        snap=published_snapshot(self.root/'serving.db',self.baseline)
+        provider=Mock();provider.request.return_value={'output':[{'type':'function_call','name':'request_technical_review','arguments':json.dumps({'product_id':2,'field':'specs.keys','reason':'inconsistencia_catalogo'}),'call_id':'a'}]}
+        submit=Mock(return_value=42);agent=ConversationAgent(snap,provider,review_submit=submit)
+        self.assertNotIn('registrada',agent.answer('Qual o preço?'));submit.assert_not_called()
+        answer=agent.answer('Registre revisão técnica das teclas do produto 2')
+        self.assertIn('registrada',answer);submit.assert_called_once_with(2,'specs.keys','inconsistencia_catalogo',version)
+        submit.side_effect=OSError('indisponível')
+        self.assertNotIn('registrada',agent.answer('Registre revisão técnica das teclas do produto 2'))
+
+    def test_agent_does_not_register_negated_or_unidentified_requests(self):
+        from unittest.mock import Mock
+        from artefact.conversation import ConversationAgent
+        batch=self.admin.stage(csv_bytes(product()));self.accept_all(batch);self.admin.approve(batch,'ok');self.admin.publish(batch)
+        snap=published_snapshot(self.root/'serving.db',self.baseline)
+        provider=Mock();provider.request.return_value={'output':[{'type':'function_call','name':'request_technical_review','arguments':json.dumps({'product_id':2,'field':'specs.keys','reason':'inconsistencia_catalogo'}),'call_id':'a'}]}
+        submit=Mock(return_value=1);agent=ConversationAgent(snap,provider,review_submit=submit)
+        for text in ('Não registre revisão técnica do produto 2','Registre revisão técnica','Registre revisão técnica do produto 3'):
+            self.assertNotIn('registrada',agent.answer(text))
+        submit.assert_not_called()

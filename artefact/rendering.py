@@ -24,6 +24,13 @@ def render_results(results):
                 if item.get('review_fields'):
                     lines.append('Há detalhes técnicos que precisam de confirmação com um vendedor.')
             if data: lines.append('Preço e estoque são do cadastro; a data de atualização não está informada.')
+        elif name=='request_technical_review':
+            if not isinstance(data,dict): raise ValueError('invalid review')
+            if data.get('clarification') in ('intent','product','field'):
+                lines.append({'intent':'Você deseja registrar uma revisão técnica? Confirme o pedido e identifique o produto.', 'product':'Qual produto você deseja revisar? Informe o nome completo ou o ID do produto.', 'field':'Qual detalhe técnico você deseja revisar: marca, categoria, teclas ou cordas?'}[data['clarification']])
+            elif data.get('registered') is True and type(data.get('case_id')) is int:
+                lines.append('Sua solicitação de revisão técnica foi registrada para análise.')
+            else: raise ValueError('invalid review')
         elif name=='orders':
             if not isinstance(data,list): raise ValueError('invalid orders')
             for order in data:

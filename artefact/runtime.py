@@ -8,6 +8,7 @@ import time
 
 from .agent import TelegramAdapter
 from .conversation import ConversationAgent
+from .review_client import configured_review_client
 from .admin import published_snapshot
 from .data import StructuralError, load_dataset
 from .provider import ResponsesProvider
@@ -51,7 +52,7 @@ def main():
         client=TelegramClient(config.telegram_token)
         state=State(config.state_path)
         provider=ResponsesProvider(config.api_key,config.model,state,config.budget,config.max_calls,config.input_price,config.output_price)
-        adapter=TelegramAdapter(ConversationAgent(snapshot,provider,snapshot_loader=(lambda: published_snapshot(Path(os.environ['ARTEFACT_CATALOG_DB']),snapshot)) if os.environ.get('ARTEFACT_CATALOG_DB') else None),client.send,state=state)
+        adapter=TelegramAdapter(ConversationAgent(snapshot,provider,snapshot_loader=(lambda: published_snapshot(Path(os.environ['ARTEFACT_CATALOG_DB']),snapshot)) if os.environ.get('ARTEFACT_CATALOG_DB') else None,review_submit=configured_review_client(os.environ)),client.send,state=state)
     except (ValueError,StructuralError) as exc:
         print(str(exc),file=sys.stderr)
         return 2

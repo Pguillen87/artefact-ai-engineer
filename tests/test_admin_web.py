@@ -71,3 +71,42 @@ class WebTests(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=8) as pool:
             statuses=list(pool.map(lambda _: self.request('GET','/',self.auth())[0],range(16)))
         self.assertEqual(statuses,[200]*16)
+
+    def test_contact_configuration_requires_csrf_and_survives_restart(self):
+        from urllib.parse import urlencode
+        headers=dict(self.auth(),Origin=f'http://127.0.0.1:{self.port}',**{'Content-Type':'application/x-www-form-urlencoded'})
+        def post(path,**fields): return self.request('POST',path,headers,urlencode(dict(fields,csrf=self.server.csrf)))[0]
+        self.assertEqual(post('/seller-contact',contact='invalid'),400)
+        self.assertEqual(post('/seller-contact',contact='(67) 99999-1234'),303)
+        self.assertEqual(self.admin.seller_contact(),'(67) 99999-1234')
+        self.assertEqual(post('/seller-contact-reset'),303)
+        self.assertEqual(self.admin.seller_contact(),'(67) 3341-4444')
+
+    def test_review_endpoint_restricts_access_and_operator_completes(self):
+        import json
+        from test_admin import csv_bytes,product
+        from urllib.parse import urlencode
+        batch=self.admin.stage(csv_bytes(product()))
+        for issue in self.admin.preview(batch)['issues']: self.admin.decide(batch,issue['id'],'accept','revisto')
+        self.admin.approve(batch,'revisto');version=self.admin.publish(batch)
+        payload=json.dumps({'product_id':2,'field':'specs.keys','reason':'inconsistencia_catalogo','catalog_version':version})
+        headers={'Content-Type':'application/json'}
+        self.assertEqual(self.request('POST','/internal/reviews',headers,payload)[0],401)
+        self.server.review_token='x'*32;headers['Authorization']='Bearer '+self.server.review_token
+        status,body=self.request('POST','/internal/reviews',headers,payload);self.assertEqual(status,201)
+        case=json.loads(body)['id'];self.assertEqual(self.admin.review_cases()[0]['status'],'open')
+        headers=dict(self.auth(),Origin=f'http://127.0.0.1:{self.port}',**{'Content-Type':'application/x-www-form-urlencoded'})
+        self.assertEqual(self.request('POST','/review-complete',headers,urlencode({'csrf':self.server.csrf,'case':case}))[0],303)
+        self.assertEqual(self.admin.review_cases()[0]['status'],'completed')
+
+    def test_review_endpoint_cannot_access_unpublished_product_or_admin_data(self):
+        import json
+        from test_admin import csv_bytes,product
+        self.admin.stage(csv_bytes(product()))
+        self.server.review_token='q'*32
+        headers={'Authorization':'Bearer '+self.server.review_token,'Content-Type':'application/json'}
+        payload=json.dumps({'product_id':2,'field':'specs.keys','reason':'inconsistencia_catalogo','catalog_version':0})
+        self.assertEqual(self.request('POST','/internal/reviews',headers,payload)[0],400)
+        self.assertEqual(self.admin.review_cases(),[])
+        self.assertEqual(self.request('GET','/',headers)[0],401)
+        self.assertEqual(self.request('GET','/internal/reviews',headers)[0],401)
