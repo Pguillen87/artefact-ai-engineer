@@ -28,10 +28,10 @@ class P1Corrections(unittest.TestCase):
         self.provider.request.return_value = {'output': [call(name, args)]}
 
     def test_budget_is_not_an_order_total(self):
-        for follow in ('Quanto fica em 3x?', 'E em 3x sem juros?'):
+        for follow in ('Quanto fica em 3x?', 'E em 3x sem juros?', 'Quanto fica em três vezes?'):
             self.provider.request.side_effect = [{'output': []}, {'output': [call('installment_quote', {'amount_brl': '900', 'installments': 3})]}]
             agent = ConversationAgent(self.snapshot, self.provider)
-            agent.answer('Tenho R$ 900 para gastar.', chat_id=1)
+            agent.answer('Tenho no máximo R$ 900.', chat_id=1)
             answer = agent.answer(follow, chat_id=1)
             self.assertNotIn('300,00', answer)
             self.provider.reset_mock(side_effect=True)

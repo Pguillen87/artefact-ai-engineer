@@ -129,6 +129,10 @@ def has_order_context(text: str) -> bool:
     return bool(_ORDER_TOTAL_CONTEXT.search(text))
 
 
+def has_budget_context(text: str) -> bool:
+    return bool(re.search(r'(?i)\b(?:orçamento|orcamento|para gastar|posso gastar|limite de gastos?|no m[aá]ximo|menos de|abaixo de)\b|\bat[eé]\s+r\$', text))
+
+
 def extract_installment_count(text: str) -> int | None:
     if not isinstance(text, str) or _ORDER_TOTAL_CONTEXT.search(text):
         return None
@@ -151,7 +155,7 @@ def parse_installment_request(text: str) -> InstallmentRequest | None:
     """Read one explicit BRL amount and one count; refuse order-history or ambiguous amounts."""
     if not isinstance(text, str) or _ORDER_TOTAL_CONTEXT.search(text):
         return None
-    if re.search(r'(?i)\b(?:orçamento|orcamento|para gastar|posso gastar|limite de gastos?)\b|\bat[eé]\s+r\$', text):
+    if has_budget_context(text):
         return None
     if re.search(r'(?i)\b(?:ou|versus|vs)\b', text) or re.search(r'(?i)R\$\s*[0-9][0-9.,]*\s+e\s+(?:R\$\s*)?[0-9]', text):
         return None

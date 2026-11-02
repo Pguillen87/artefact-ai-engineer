@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 import re
 
-from .commercial import (has_order_context, money_mentions,
+from .commercial import (has_budget_context, has_order_context, money_mentions,
                          extract_installment_count, parse_installment_request,
                          InstallmentRequest)
 from .intent import normalize
@@ -113,7 +113,7 @@ def next_context(text: str, previous: ConversationContext | None, turn: int) -> 
         amount = amounts[0]
         if amount is not None:
             spoken = normalize(text)
-            role = ('budget_cap' if re.search(r'\b(?:orcamento|para gastar|posso gastar|limite de gastos?)\b|\bate\s+r\$', spoken)
+            role = ('budget_cap' if has_budget_context(text)
                     else 'per_installment' if re.search(r'\bparcela\b', spoken) else 'total')
             return ConversationContext(amount, role, turn=turn)
     return ConversationContext(turn=turn)
