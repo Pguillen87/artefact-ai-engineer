@@ -65,7 +65,11 @@ class Handler(BaseHTTPRequestHandler):
                 for v in self.server.admin.versions():
                     if v['active']: body+=f'<li>Versão {v["id"]} (ativa)</li>'
                     else: body+=f'<li>Versão {v["id"]}<form method="post" action="/rollback"><input type="hidden" name="csrf" value="{self.server.csrf}"><input type="hidden" name="version" value="{v["id"]}"><label>Motivo <input name="reason" maxlength="1000" required></label><button>Ativar versão</button></form></li>'
-                body+='</ul><h2>Histórico administrativo</h2>'
+                body+='</ul><h2>Contato de vendedores</h2>'
+                contact=escape(self.server.admin.seller_contact(),quote=True)
+                body+=f'<p>Contato atual: {contact}</p><form method="post" action="/seller-contact"><input type="hidden" name="csrf" value="{self.server.csrf}"><label>Contato <input name="contact" value="{contact}" maxlength="16" required></label><button>Salvar contato</button></form>'
+                body+=self._form('/seller-contact-reset',{},'Restaurar contato padrão')
+                body+='<h2>Histórico administrativo</h2>'
                 for event in self.server.admin.history(): body+='<pre>'+escape(json.dumps(event,ensure_ascii=False,indent=2))+'</pre>'
             elif target.path=='/batch':
                 batch=int(parse_qs(target.query)['id'][0]); info=self.server.admin.preview(batch)
@@ -120,6 +124,10 @@ class Handler(BaseHTTPRequestHandler):
                 batch=int(fields['batch']);self.server.admin.approve(batch,fields['review']);location=f'/batch?id={batch}'
             elif self.path=='/publish':
                 self.server.admin.publish(int(fields['batch']));location='/'
+            elif self.path=='/seller-contact':
+                self.server.admin.set_seller_contact(fields['contact']);location='/'
+            elif self.path=='/seller-contact-reset':
+                self.server.admin.reset_seller_contact();location='/'
             elif self.path=='/rollback':
                 self.server.admin.rollback(int(fields['version']),fields['reason']);location='/'
             else: self._send(404,'Não encontrado');return

@@ -52,7 +52,7 @@ class OpenAIPlanner:
 
 class Agent:
     def __init__(self, snapshot, planner):
-        self.catalog=Catalog(snapshot); self.orders=OrderService(snapshot); self.planner=planner
+        self.catalog=Catalog(snapshot); self.orders=OrderService(snapshot); self.planner=planner; self.snapshot=snapshot
 
     def answer(self, text):
         if not isinstance(text,str) or not text.strip() or len(text)>2000:
@@ -80,6 +80,8 @@ class Agent:
                     result=self.catalog.promotion(args['product_id'])
                 elif name=='policy' and set(args)=={'topic'} and isinstance(args['topic'],str):
                     result=get_policy(args['topic'])
+                    if args['topic']=='contacts' and result is not None:
+                        result['summary']='Demonstração: atendimento remoto (67) 3321-4500; contato da loja física/vendedores '+self.snapshot.seller_contact+'.'
                 elif name=='orders' and set(args)=={'full_name'} and isinstance(args['full_name'],str) and 1<len(args['full_name'])<=200:
                     # Name must have been supplied by the user, not invented by the model.
                     if args['full_name'].casefold() not in text.casefold(): return FALLBACK

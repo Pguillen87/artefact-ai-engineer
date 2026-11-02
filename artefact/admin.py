@@ -5,6 +5,7 @@ import io
 import hashlib
 from hmac import compare_digest as hmac_compare
 import json
+import re
 import sqlite3
 from dataclasses import asdict
 from pathlib import Path
@@ -14,6 +15,13 @@ from .data import SCHEMAS, Snapshot, StructuralError, _freeze, _parse, _scan
 
 MAX_BYTES = 1024 * 1024
 MAX_ROWS = 1000
+DEFAULT_SELLER_CONTACT = '(67) 3341-4444'
+
+
+def _validate_contact(value):
+    if not isinstance(value,str) or not re.fullmatch(r'\([1-9][0-9]\) [2-9][0-9]{3,4}-[0-9]{4}',value):
+        raise ValueError('Contato inválido; use (DD) NNNN-NNNN ou (DD) NNNNN-NNNN')
+    return value
 
 
 def _encode_products(rows):
@@ -100,11 +108,14 @@ def published_snapshot(path, baseline):
         con.execute('BEGIN')
         row = con.execute('SELECT v.products FROM active a JOIN versions v ON v.id=a.version_id WHERE a.id=1').fetchone()
         if row is None: raise ValueError('Catálogo publicado inválido')
+        exists=con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='public_settings'").fetchone()
+        setting=con.execute("SELECT value FROM public_settings WHERE key='seller_contact'").fetchone() if exists else None
+        contact=_validate_contact(setting[0]) if setting else DEFAULT_SELLER_CONTACT
         products = _parse('products', row[0])
         tables = dict(baseline.tables)
         tables['products'] = tuple(baseline.tables['products']) + tuple(_freeze(p) for p in products)
         issues = baseline.issues + _scan(products, baseline.tables['categories'])
-        return Snapshot(MappingProxyType(tables), issues, baseline.hashes)
+        return Snapshot(MappingProxyType(tables), issues, baseline.hashes, contact)
     finally:
         con.close()
 
@@ -143,10 +154,32 @@ class CatalogAdmin:
             if 'approved_hash' not in columns: con.execute("ALTER TABLE batches ADD COLUMN approved_hash TEXT NOT NULL DEFAULT ''")
             con.execute('CREATE TABLE IF NOT EXISTS decisions (batch_id INTEGER NOT NULL REFERENCES batches(id), issue_id TEXT NOT NULL, evidence TEXT NOT NULL, justification TEXT NOT NULL, created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(batch_id,issue_id))')
         with _connect(self.serving_path) as con:
+            con.execute('CREATE TABLE IF NOT EXISTS public_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
             con.execute('CREATE TABLE IF NOT EXISTS versions (id INTEGER PRIMARY KEY, products BLOB NOT NULL, created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)')
             con.execute('CREATE TABLE IF NOT EXISTS active (id INTEGER PRIMARY KEY CHECK(id=1), version_id INTEGER NOT NULL REFERENCES versions(id))')
             con.execute('INSERT OR IGNORE INTO versions(id,products) VALUES(0,?)', (_encode_products([]),))
             con.execute('INSERT OR IGNORE INTO active(id,version_id) VALUES(1,0)')
+
+    def seller_contact(self):
+        with _connect(self.serving_path) as con:
+            row=con.execute("SELECT value FROM public_settings WHERE key='seller_contact'").fetchone()
+            return _validate_contact(row[0]) if row else DEFAULT_SELLER_CONTACT
+
+    def set_seller_contact(self, contact):
+        contact=_validate_contact(contact)
+        con=self._transaction()
+        try:
+            previous=con.execute("SELECT value FROM public_settings WHERE key='seller_contact'").fetchone()
+            con.execute("INSERT INTO public_settings(key,value) VALUES('seller_contact',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(contact,))
+            reason=json.dumps({'before':previous[0] if previous else DEFAULT_SELLER_CONTACT,'after':contact},ensure_ascii=False)
+            con.execute("INSERT INTO admin.events(action,reason) VALUES('seller_contact',?)",(reason,))
+            con.commit()
+        except BaseException:
+            con.rollback();raise
+        finally: con.close()
+
+    def reset_seller_contact(self):
+        self.set_seller_contact(DEFAULT_SELLER_CONTACT)
 
     def _existing(self):
         snapshot = published_snapshot(self.serving_path, self.baseline)

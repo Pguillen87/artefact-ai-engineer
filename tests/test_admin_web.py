@@ -71,3 +71,13 @@ class WebTests(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=8) as pool:
             statuses=list(pool.map(lambda _: self.request('GET','/',self.auth())[0],range(16)))
         self.assertEqual(statuses,[200]*16)
+
+    def test_contact_configuration_requires_csrf_and_survives_restart(self):
+        from urllib.parse import urlencode
+        headers=dict(self.auth(),Origin=f'http://127.0.0.1:{self.port}',**{'Content-Type':'application/x-www-form-urlencoded'})
+        def post(path,**fields): return self.request('POST',path,headers,urlencode(dict(fields,csrf=self.server.csrf)))[0]
+        self.assertEqual(post('/seller-contact',contact='invalid'),400)
+        self.assertEqual(post('/seller-contact',contact='(67) 99999-1234'),303)
+        self.assertEqual(self.admin.seller_contact(),'(67) 99999-1234')
+        self.assertEqual(post('/seller-contact-reset'),303)
+        self.assertEqual(self.admin.seller_contact(),'(67) 3341-4444')

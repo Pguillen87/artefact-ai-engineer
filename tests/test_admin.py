@@ -131,3 +131,21 @@ class CatalogAdminTests(unittest.TestCase):
         db.close()
         with self.assertRaises(ValueError): self.admin.publish(batch)
         self.assertEqual(len(published_snapshot(self.root/'serving.db',self.baseline).tables['products']),1)
+
+    def test_seller_contact_settings_are_public_audited_and_persistent(self):
+        from unittest.mock import Mock
+        from artefact.conversation import ConversationAgent
+        provider=Mock();provider.request.return_value={'output':[{'type':'function_call','name':'policy','arguments':json.dumps({'topic':'contacts'}),'call_id':'x'}]}
+        def answer():
+            snap=published_snapshot(self.root/'serving.db',self.baseline)
+            return ConversationAgent(snap,provider).answer('Qual o contato da loja?')
+        self.assertIn('(67) 3341-4444',answer());self.assertIn('(67) 3321-4500',answer())
+        for bad in ('', 'abc', '(67) 1234-5678 ext 1', '<script>'):
+            with self.assertRaises(ValueError): self.admin.set_seller_contact(bad)
+        self.admin.set_seller_contact('(67) 99999-1234')
+        self.assertIn('(67) 99999-1234',answer());self.assertIn('(67) 3321-4500',answer())
+        restarted=CatalogAdmin(self.root/'admin.db',self.root/'serving.db',self.baseline)
+        self.assertEqual(restarted.seller_contact(),'(67) 99999-1234')
+        restarted.reset_seller_contact()
+        self.assertIn('(67) 3341-4444',answer())
+        self.assertEqual([e['action'] for e in restarted.history()].count('seller_contact'),2)

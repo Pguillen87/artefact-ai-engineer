@@ -53,6 +53,7 @@ class Snapshot:
     tables: Mapping[str, tuple[Mapping, ...]]
     issues: tuple[QualityIssue, ...]
     hashes: Mapping[str, str]
+    seller_contact: str = '(67) 3341-4444'
 
 
 def _normalize(text: str) -> str:
