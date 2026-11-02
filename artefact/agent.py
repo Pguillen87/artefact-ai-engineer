@@ -10,7 +10,7 @@ import urllib.request
 
 from .services import Catalog, OrderService, get_policy
 from .commercial import quote_installments, extract_installment_count, parse_installment_request
-from .intent import validate_catalog_intent, validate_policy_intent
+from .intent import normalize, validate_catalog_intent, validate_policy_intent
 from .context import explicit_product, name_in_text, product_amount_requires_clarification
 from .telemetry import bind_operation, event, operation_id, reset_operation
 
@@ -158,7 +158,9 @@ class Agent:
                             args[key]=Decimal(args[key])
                     count=args.pop('installments',None)
                     if count is not None:
-                        if forbid_product_installments:
+                        spoken = normalize(text)
+                        named = [row for row in self.snapshot.tables['products'] if normalize(row['name']) in spoken]
+                        if forbid_product_installments or len(named) > 1 or re.search(r'\b(?:compar\w*|versus|vs)\b', spoken):
                             return CLARIFY
                         if name!='search_products' or type(count) is not int or not 1 <= count <= 12 or extract_installment_count(count_text if count_text is not None else text) != count:
                             return FALLBACK

@@ -82,3 +82,7 @@ class AuditBlockers(unittest.TestCase):
         provider = Mock(); provider.request.return_value = {'output': [call('search_products', {'text': 'Korg Synth', 'installments': 3})]}
         answer = ConversationAgent(self.snapshot, provider).answer('Korg Synth e Korg Alternative em 3x?')
         self.assertNotIn('3x R$', answer)
+        from artefact.agent import Agent
+        planner = Mock(); planner.plan.return_value = [('search_products', {'text': 'Korg Synth', 'installments': 3})]
+        result = Agent(self.snapshot, planner).answer('Korg Synth e Korg Alternative em 3x?')
+        self.assertNotIn('installment_quote', result)
