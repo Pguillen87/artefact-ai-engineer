@@ -28,7 +28,9 @@ TOOLS = [
 def _review_intent(text, product, selected_field, all_products):
     """Conservative authorization for a structured write; never infer customer consent."""
     normalized=''.join(c for c in unicodedata.normalize('NFKD',text.casefold()) if not unicodedata.combining(c))
-    if '?' in normalized or re.search(r'\b(nao|nunca|sem|evite|proibido|como|explica|explicar|posso|possivel|se)\b',normalized):
+    if '?' in normalized or re.search(r'\b(nao|nunca|sem|evite|proibido|como|explica|explicar|posso|possivel|se|quando|depois|apos|antes|aguarde|espera|aguardar|esperar|ate|futuramente|mediante|sujeito|sujeita|condicao|condicionado|condicionada|salvo|exceto|talvez)\b',normalized):
+        return 'intent'
+    if re.search(r'\b(?:caso\s+(?:eu|voce|ele|ela|nos|eles|elas)|assim\s+que|desde\s+que|contanto\s+que)\b',normalized):
         return 'intent'
     if not re.match(r'^\s*(?:(?:por favor|por gentileza)[, ]+)?(?:registre|abra|solicite|quero registrar|quero abrir|gostaria de registrar|gostaria de abrir)\b',normalized):
         return 'intent'

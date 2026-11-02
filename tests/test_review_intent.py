@@ -68,3 +68,36 @@ class ReviewIntentTests(unittest.TestCase):
   self.assertEqual(len(restored.review_cases()),2)
   self.assertEqual(restored.create_review(2,'specs.keys','inconsistencia_catalogo',self.version),first)
   self.assertEqual(len(restored.review_cases()),2)
+
+ def test_conditional_future_authorization_never_persists_and_new_request_works(self):
+  callback=Mock(wraps=self.admin.create_review)
+  call={'type':'function_call','name':'request_technical_review','arguments':json.dumps({'product_id':2,'field':'specs.keys','reason':'inconsistencia_catalogo'}),'call_id':'a'}
+  self.provider.request.return_value={'output':[call]}
+  agent=ConversationAgent(self.snapshot,self.provider,review_submit=callback)
+  messages=['Registre revisão técnica das teclas do produto 2, caso eu confirme depois.',
+            'Registre revisão técnica das teclas do produto 2 quando eu confirmar.',
+            'Abra revisão das teclas do produto 2, mas só depois da minha confirmação.',
+            'Registre revisão das teclas do produto 2 apenas se eu autorizar.',
+            'Registre revisão das teclas do produto 2 e aguarde até minha confirmação.',
+            'Abra revisão das teclas do produto 2, sujeito à minha autorização.',
+            'Registre revisão das teclas do produto 2, assim que eu permitir.']
+  for text in messages:
+   with self.subTest(text=text):
+    response=agent.answer(text,chat_id=123)
+    self.assertIn('confirme',response.casefold());self.assertNotIn('registrada',response.casefold())
+    callback.assert_not_called();self.assertEqual(self.admin.review_cases(),[])
+  for text in ('Registre revisão técnica das teclas do produto 2','Abra um caso de revisão técnica das teclas do produto 2'):
+   with self.subTest(text=text):self.assertIn('registrada',agent.answer(text,chat_id=123))
+  self.assertEqual(callback.call_count,2)
+  self.assertEqual(len(self.admin.review_cases()),1)
+
+ def test_previous_affirmation_does_not_authorize_current_conditional(self):
+  call={'type':'function_call','name':'request_technical_review','arguments':json.dumps({'product_id':2,'field':'specs.keys','reason':'inconsistencia_catalogo'}),'call_id':'a'}
+  self.provider.request.return_value={'output':[call]}
+  callback=Mock(wraps=self.admin.create_review)
+  agent=ConversationAgent(self.snapshot,self.provider,review_submit=callback)
+  self.assertIn('registrada',agent.answer('Registre revisão técnica das teclas do produto 2',chat_id=123))
+  callback.reset_mock()
+  response=agent.answer('Registre revisão técnica das teclas do produto 2 quando eu confirmar',chat_id=123)
+  self.assertIn('confirme',response.casefold());callback.assert_not_called()
+  self.assertEqual(len(self.admin.review_cases()),1)
