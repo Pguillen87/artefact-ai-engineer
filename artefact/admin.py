@@ -153,6 +153,7 @@ class CatalogAdmin:
             columns={r[1] for r in con.execute('PRAGMA table_info(batches)')}
             if 'approved_hash' not in columns: con.execute("ALTER TABLE batches ADD COLUMN approved_hash TEXT NOT NULL DEFAULT ''")
             con.execute("CREATE TABLE IF NOT EXISTS technical_reviews (id INTEGER PRIMARY KEY, product_id INTEGER NOT NULL, field TEXT NOT NULL, reason TEXT NOT NULL, catalog_version INTEGER NOT NULL, status TEXT NOT NULL, created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+            con.execute("CREATE INDEX IF NOT EXISTS technical_reviews_open_lookup ON technical_reviews(product_id,field,catalog_version) WHERE status='open'")
             con.execute('CREATE TABLE IF NOT EXISTS decisions (batch_id INTEGER NOT NULL REFERENCES batches(id), issue_id TEXT NOT NULL, evidence TEXT NOT NULL, justification TEXT NOT NULL, created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(batch_id,issue_id))')
         with _connect(self.serving_path) as con:
             con.execute('CREATE TABLE IF NOT EXISTS public_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
@@ -173,6 +174,9 @@ class CatalogAdmin:
             if not any(p['product_id']==product_id for p in products): raise ValueError('Produto inexistente')
             if not any(i.product_id==product_id and i.field==field for i in _scan(products,self.baseline.tables['categories'])):
                 raise ValueError('Campo sem conflito registrado')
+            existing=con.execute("SELECT id FROM admin.technical_reviews WHERE product_id=? AND field=? AND catalog_version=? AND status='open' ORDER BY id LIMIT 1",(product_id,field,catalog_version)).fetchone()
+            if existing:
+                con.commit();return existing[0]
             case=con.execute("INSERT INTO admin.technical_reviews(product_id,field,reason,catalog_version,status) VALUES(?,?,?,?, 'open')",(product_id,field,reason,catalog_version)).lastrowid
             con.commit();return case
         except BaseException:

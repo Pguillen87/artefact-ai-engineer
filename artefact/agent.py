@@ -2,6 +2,7 @@
 from decimal import Decimal, InvalidOperation
 import json
 import re
+import unicodedata
 import urllib.error
 import urllib.request
 
@@ -22,6 +23,35 @@ TOOLS = [
  {'type':'function','name':'orders','description':'Consulta pedidos fictícios pelo nome completo informado pelo cliente.',
   'parameters':{'type':'object','properties':{'full_name':{'type':'string'}},'required':['full_name'],'additionalProperties':False}},
 ]
+
+
+def _review_intent(text, product, selected_field, all_products):
+    """Conservative authorization for a structured write; never infer customer consent."""
+    normalized=''.join(c for c in unicodedata.normalize('NFKD',text.casefold()) if not unicodedata.combining(c))
+    if '?' in normalized or re.search(r'\b(nao|nunca|sem|evite|proibido|como|explica|explicar|posso|possivel|se)\b',normalized):
+        return 'intent'
+    if not re.match(r'^\s*(?:(?:por favor|por gentileza)[, ]+)?(?:registre|abra|solicite|quero registrar|quero abrir|gostaria de registrar|gostaria de abrir)\b',normalized):
+        return 'intent'
+    if not re.search(r'\b(revisao|analise|verificacao|caso)\b',normalized): return 'intent'
+    # Product IDs count only when explicitly labelled; unrelated order IDs and money do not.
+    references=re.findall(r'\bproduto\s+(?:id\s*)?(?:n[ºo.]\s*)?(\d+)\b(?![.,]\d)(?!\s*reais\b)',normalized)
+    if re.search(r'\bprodutos\b',normalized) or re.search(r'\bproduto\s+\d+\s+e\s+\d+\b',normalized): return 'product'
+    names=[]
+    for row in all_products:
+        label=''.join(c for c in unicodedata.normalize('NFKD',row['name'].casefold()) if not unicodedata.combining(c))
+        if len(label)>=3 and label in normalized: names.append((row['product_id'],label))
+    identifiers={int(value) for value in references} | {item[0] for item in names}
+    if identifiers != {product['product_id']}: return 'product'
+    # Product names can contain field words; they do not themselves specify the issue.
+    for _,label in names: normalized=normalized.replace(label,' ')
+    aliases={'brand':r'\b(marca|fabricante)\b','category_id':r'\b(categoria)\b','specs.keys':r'\b(teclas|teclado de teclas)\b','specs.strings':r'\b(cordas)\b'}
+    mentioned={field for field,pattern in aliases.items() if re.search(pattern,normalized)}
+    conflicts=set(product['review_fields'])
+    if mentioned:
+        if mentioned != {selected_field} or selected_field not in conflicts: return 'field'
+    elif len(conflicts)!=1 or selected_field not in conflicts:
+        return 'field'
+    return None
 
 class OpenAIPlanner:
     """Select allowlisted read-only functions; rendering is deterministic."""
@@ -90,9 +120,11 @@ class Agent:
                     if self.review_submit is None or type(pid) is not int or not isinstance(field,str) or not isinstance(reason,str): return FALLBACK
                     product=self.catalog.product(pid)
                     if not product or field not in product['review_fields'] or reason!='inconsistencia_catalogo': return FALLBACK
-                    if re.search(r'\b(não|nao|nunca|sem|evite|proibido)\b',text,re.I): return FALLBACK
-                    if not re.search(r'\b(registre|registrar|abra|abrir|solicite|solicitar)\b',text,re.I): return FALLBACK
-                    if not re.search(r'(?<!\d)'+str(pid)+r'(?!\d)',text) and product['name'].casefold() not in text.casefold(): return FALLBACK
+                    clarification=_review_intent(text,product,field,self.snapshot.tables['products'])
+                    if clarification:
+                        result={'clarification':clarification}
+                        results.append({'consulta':name,'resultado':result})
+                        continue
                     case=self.review_submit(pid,field,reason,self.snapshot.catalog_version)
                     if type(case) is not int or case <= 0: return FALLBACK
                     result={'registered':True,'case_id':case}

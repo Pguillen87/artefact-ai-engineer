@@ -171,10 +171,10 @@ class CatalogAdminTests(unittest.TestCase):
         provider=Mock();provider.request.return_value={'output':[{'type':'function_call','name':'request_technical_review','arguments':json.dumps({'product_id':2,'field':'specs.keys','reason':'inconsistencia_catalogo'}),'call_id':'a'}]}
         submit=Mock(return_value=42);agent=ConversationAgent(snap,provider,review_submit=submit)
         self.assertNotIn('registrada',agent.answer('Qual o preço?'));submit.assert_not_called()
-        answer=agent.answer('Registre revisão técnica do produto 2')
+        answer=agent.answer('Registre revisão técnica das teclas do produto 2')
         self.assertIn('registrada',answer);submit.assert_called_once_with(2,'specs.keys','inconsistencia_catalogo',version)
         submit.side_effect=OSError('indisponível')
-        self.assertNotIn('registrada',agent.answer('Registre revisão técnica do produto 2'))
+        self.assertNotIn('registrada',agent.answer('Registre revisão técnica das teclas do produto 2'))
 
     def test_agent_does_not_register_negated_or_unidentified_requests(self):
         from unittest.mock import Mock
