@@ -77,17 +77,23 @@ class Catalog:
         for p in self._snapshot.tables['products']:
             if (query is not None and query not in _name(p['name'])) or (category is not None and categories[p['category_id']] != _name(category)):
                 continue
-            if (min_price is not None or max_price is not None) and p.get('price_brl') is None:
-                continue
-            if min_price is not None and p['price_brl'] < min_price or max_price is not None and p['price_brl'] > max_price:
-                continue
             item = self.product(p['product_id'])
+            effective = item['price_quote']['checkout_price_brl']
+            if (min_price is not None or max_price is not None) and effective is None:
+                continue
+            if min_price is not None and effective < min_price or max_price is not None and effective > max_price:
+                continue
             if not available_only or item['available']:
                 found.append(item)
         if available_only:
-            found.sort(key=lambda item: (item['price_brl'] is None, -(item['price_brl'] or Decimal('0')), item['product_id']))
+            found.sort(key=lambda item: (item['price_quote']['checkout_price_brl'] is None,
+                                         -(item['price_quote']['checkout_price_brl'] or Decimal('0')),
+                                         item['product_id']))
             if len(found)>limit and limit>1:
-                return tuple(found[:limit-1]+[found[-1]])
+                priced = [item for item in found if item['price_quote']['checkout_price_brl'] is not None]
+                if len(priced) >= limit:
+                    return tuple(priced[:limit-1]+[priced[-1]])
+                return tuple(found[:limit])
         return tuple(found[:limit])
 
     def promotion(self, product_id):
