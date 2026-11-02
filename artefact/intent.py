@@ -68,6 +68,8 @@ def validate_catalog_intent(name: str, args: dict, text: str, snapshot, product_
         return False
     if args.get('available_only') is True and re.search(r'\bindisponiveis\b', normalized):
         return False
+    explicit_products = [p for p in snapshot.tables['products']
+                         if re.search(r'(?<!\w)' + re.escape(normalize(p['name'])) + r'(?!\w)', normalized)]
     query = args.get('text')
     if query is not None:
         if not isinstance(query, str) or not query.strip():
@@ -76,6 +78,13 @@ def validate_catalog_intent(name: str, args: dict, text: str, snapshot, product_
             return False
         if re.search(r'\b(?:sem|exceto|nao quero)\s+' + re.escape(normalize(query)) + r'\b', normalized):
             return False
+        if name == 'search_products' and not explicit_products:
+            continuation = re.search(r'(?<!\w)' + re.escape(normalize(query)) + r'\s+([a-z][a-z0-9-]*)', normalized)
+            ordinary = {'em','ate','com','tem','possui','esta','disponivel','disponiveis','estoque',
+                        'por','no','na','de','do','da','e','ou','para','qual','custa','serve',
+                        'sai','preco','garantia','barato','baratos','acustico','eletrico'}
+            if continuation and continuation.group(1) not in ordinary:
+                return False
         terms = {normalize(query)}
         terms.update(normalize(product['name']) for product in snapshot.tables['products']
                      if _words(query).issubset(_words(product['name'])))
@@ -88,7 +97,6 @@ def validate_catalog_intent(name: str, args: dict, text: str, snapshot, product_
     spoken_terms = _category_terms(text)
     mentioned_categories = {c['category_id'] for c in snapshot.tables['categories']
                             if _category_terms(c['name']).intersection(spoken_terms)}
-    explicit_products = [p for p in snapshot.tables['products'] if normalize(p['name']) in normalized]
     if 'sopro' in spoken_terms:
         spoken = _words(text)
         qualifier = 'metais' if spoken.intersection({'metal','metais'}) else 'madeiras' if spoken.intersection({'madeira','madeiras'}) else None

@@ -60,6 +60,16 @@ class ArchitectureContracts(unittest.TestCase):
         answer = ConversationAgent(self.snapshot, provider).answer('Vocês têm um teclado Yamaha?', chat_id=1)
         self.assertNotIn('Korg Synth', answer)
 
+    def test_partial_model_name_is_not_treated_as_exact_product(self):
+        provider=Mock(); provider.request.return_value={'output':[tool('search_products',{'category':'Teclados e Pianos'})]}
+        answer=ConversationAgent(self.snapshot,provider).answer('Procuro Korg Synthesizer',chat_id=1)
+        self.assertNotIn('Korg Synth:',answer)
+        self.assertIn('esclareça',answer.lower())
+        provider.request.return_value={'output':[tool('search_products',{'text':'Korg'})]}
+        answer=ConversationAgent(self.snapshot,provider).answer('Procuro Korg Synthesizer',chat_id=1)
+        self.assertNotIn('Korg Synth:',answer)
+        self.assertIn('esclareça',answer.lower())
+
     def test_empty_search_does_not_return_catalog(self):
         provider=Mock(); provider.request.return_value={'output':[tool('search_products',{})]}
         answer=ConversationAgent(self.snapshot,provider).answer('Quero consultar um produto',chat_id=1)
