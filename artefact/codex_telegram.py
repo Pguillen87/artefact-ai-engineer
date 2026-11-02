@@ -51,6 +51,8 @@ def poll_once(client,adapter,offset):
         chat=message.get('chat',{}) if isinstance(message,dict) else {}
         if isinstance(chat,dict) and chat.get('type')=='private' and chat.get('id') == adapter.allowed_chat_id:
             adapter.handle(update)
+        else:
+            event(operation_id(),'telegram','update','access','ignored')
         offset=max(offset,update['update_id']+1)
     return offset
 

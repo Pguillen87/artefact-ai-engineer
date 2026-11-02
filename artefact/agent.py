@@ -243,17 +243,22 @@ class TelegramAdapter:
             return
         update_id=update.get('update_id'); message=update.get('message',{})
         if not isinstance(message,dict) or not isinstance(message.get('chat'),dict):
+            event(op,'telegram','update','validation','ignored')
             return
         chat=message['chat']
         if type(update_id) is not int or update_id in self.seen or chat.get('type')!='private' or type(chat.get('id')) is not int:
+            event(op,'telegram','update','validation','ignored')
             return
         if self.allowed_chat_id is not None and chat['id'] != self.allowed_chat_id:
+            event(op,'telegram','update','access','ignored')
             return
         text=message.get('text')
         if not isinstance(text,str) or not text.strip() or len(text)>2000:
+            event(op,'telegram','update','validation','ignored')
             return
         try:
             if self.state is not None and not self.state.claim_update(update_id):
+                event(op,'telegram','claim','persistence','ignored')
                 return
         except sqlite3.Error as exc:
             event(op,'telegram','claim','persistence','failure',error=exc)

@@ -22,7 +22,10 @@ class TelegramClient:
             raise TelegramError('Telegram request failed') from None
 
     def _call(self, method, payload):
-        result=self._transport(method,payload)
+        try:
+            result=self._transport(method,payload)
+        except (OSError, ValueError, urllib.error.URLError):
+            raise TelegramError('Telegram request failed') from None
         if not isinstance(result,dict) or result.get('ok') is not True:
             raise TelegramError('Telegram request failed')
         return result.get('result')

@@ -41,15 +41,18 @@ class ConversationAgent:
             store.popitem(last=False)
 
     def answer(self, text, chat_id=None):
-        if not isinstance(text, str) or not text.strip() or len(text) > 2000:
-            return FALLBACK
-        if text.strip() == '/start' or _GREETING.fullmatch(text.strip()):
-            return 'Olá! Como posso ajudar com instrumentos, pedidos ou políticas da loja?'
-        if re.fullmatch(r'(o que voc[eê] faz|quem [eé] voc[eê]|como voc[eê] pode ajudar)[?! .]*', text.strip(), re.I):
-            return 'Posso ajudar com produtos, pedidos fictícios e políticas da loja.'
-
         op = operation_id()
         started = time.monotonic()
+        if not isinstance(text, str) or not text.strip() or len(text) > 2000:
+            event(op, 'conversation', 'complete', 'validation', 'failure')
+            return FALLBACK
+        if text.strip() == '/start' or _GREETING.fullmatch(text.strip()):
+            event(op, 'conversation', 'complete', 'conversation', 'success')
+            return 'Olá! Como posso ajudar com instrumentos, pedidos ou políticas da loja?'
+        if re.fullmatch(r'(o que voc[eê] faz|quem [eé] voc[eê]|como voc[eê] pode ajudar)[?! .]*', text.strip(), re.I):
+            event(op, 'conversation', 'complete', 'conversation', 'success')
+            return 'Posso ajudar com produtos, pedidos fictícios e políticas da loja.'
+
         prior = self.context.get(chat_id) if chat_id is not None else None
         current = next_context(text, prior, (prior.turn + 1) if prior else 1)
         self._remember(self.context, chat_id, current)
@@ -87,9 +90,11 @@ class ConversationAgent:
                 return answer
             if len(calls) > 3:
                 event(op, 'conversation', 'plan', 'validation', 'failure')
+                event(op, 'conversation', 'complete', 'validation', 'failure')
                 return FALLBACK
             if len(calls) > 1 and any(c.get('name') == 'request_technical_review' for c in calls):
                 event(op, 'conversation', 'plan', 'validation', 'failure')
+                event(op, 'conversation', 'complete', 'validation', 'failure')
                 return WRITE_ISOLATION
 
             stage = 'plan'
@@ -128,6 +133,8 @@ class ConversationAgent:
                     category = 'validation' if evidence == CLARIFY else 'integration' if evidence == WRITE_UNCERTAIN else 'tool'
                     event(op, 'conversation', 'tool', category, 'uncertain' if evidence == WRITE_UNCERTAIN else 'failure',
                           side_effect='unknown' if evidence == WRITE_UNCERTAIN else 'none', action=plan.name)
+                    event(op, 'conversation', 'complete', category, 'uncertain' if evidence == WRITE_UNCERTAIN else 'failure',
+                          side_effect='unknown' if evidence == WRITE_UNCERTAIN else 'none')
                     return evidence
                 results.extend(evidence)
                 written = any(item['consulta'] == 'request_technical_review' and
@@ -160,6 +167,8 @@ class ConversationAgent:
         except Exception as exc:
             category = 'provider' if stage == 'provider' else 'persistence' if stage == 'snapshot' else 'validation' if stage == 'plan' else 'execution'
             event(op, 'conversation', stage, category, 'failure', error=exc,
+                  side_effect='committed' if written else 'none', duration_ms=int((time.monotonic()-started)*1000))
+            event(op, 'conversation', 'complete', category, 'failure',
                   side_effect='committed' if written else 'none', duration_ms=int((time.monotonic()-started)*1000))
             if written:
                 return 'Sua solicitação de revisão técnica foi registrada para análise.'
