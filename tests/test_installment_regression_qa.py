@@ -62,7 +62,7 @@ class InstallmentRegressionQA(unittest.TestCase):
                 self.assertEqual(extract_installment_request('Quero pagar 3x de R$ 150,00' + suffix), (Decimal('450'), 3))
         for text in ('Parcelar R$ 150 ou R$ 200 em 3x?', 'Parcelar R$ 150 em 2x ou 3x?',
                      'Frete de R$ 150 em 3x?', 'Pedido histórico de R$ 150 em 3x?',
-                     'Quero pagar 3x R$ 150'):
+                     'Quero pagar 3x R$ 150', 'Quero pagar R$ 150 3x'):
             with self.subTest(text=text): self.assertIsNone(extract_installment_request(text))
 
     def test_tool_cannot_substitute_amount_and_below_minimum_is_rejected(self):

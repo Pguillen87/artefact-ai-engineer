@@ -151,7 +151,7 @@ def parse_installment_request(text: str) -> InstallmentRequest | None:
     count_match = _INSTALLMENT_COUNT.search(text)
     if not per_part and count_match.start() < match.start():
         return None
-    if not per_part and not re.search(r'(?i)\b(?:em|parcelar|parcelamento|dividir|pagar)\b', text):
+    if not per_part and not re.search(r'(?i)\b(?:em|a)\s*\d{1,2}\s*(?:x\b|vezes\b|parcelas?\b)', text):
         return None
     return InstallmentRequest(amount, amount * count if per_part else amount,
                               amount if per_part else None, count)
