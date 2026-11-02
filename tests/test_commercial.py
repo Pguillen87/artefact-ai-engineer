@@ -55,7 +55,8 @@ class CommercialRulesTests(unittest.TestCase):
   for amount in ('R$ 1.000,00','R$ 1,000.00','R$ 1.000','R$ 1,000'):
    with self.subTest(amount=amount):
     self.assertEqual(extract_installment_request(f'Parcelar {amount} em 2x?'),(Decimal('1000.00'),2))
-  self.assertEqual(extract_installment_request('R$250,00 em 2 vezes?'),(Decimal('250.00'),2))
+  self.assertIsNone(extract_installment_request('R$250,00 em 2 vezes?'))
+  self.assertEqual(extract_installment_request('Simule R$250,00 em 2 vezes?'),(Decimal('250.00'),2))
 
  def test_explicit_amount_parser_rejects_ambiguous_freight_and_history(self):
   for text in (

@@ -11,6 +11,31 @@ def normalize(value: str) -> str:
                             if not unicodedata.combining(ch)).split())
 
 
+def product_reference(text: str, name: str) -> str:
+    """Classify a product mention conservatively; a mention alone grants no selection."""
+    spoken = normalize(text)
+    target = normalize(name)
+    matches = list(re.finditer(r'(?<!\w)' + re.escape(target) + r'(?!\w)', spoken))
+    if not matches:
+        first = target.split()[0]
+        matches = list(re.finditer(r'(?<!\w)' + re.escape(first) + r'(?!\w)', spoken)) if len(first) >= 3 else []
+    if not matches:
+        return 'unmentioned'
+    match = matches[-1]
+    start = max(spoken.rfind(mark, 0, match.start()) for mark in ('.', ';', '!', '?')) + 1
+    clause = spoken[start:match.start()]
+    if re.search(r'\b(?:nao|nunca|sem|exceto|evite|dispenso)\b', clause):
+        return 'rejected'
+    tail = re.split(r'[.!?;]', spoken[match.end():], maxsplit=1)[0]
+    if re.search(r'\b(?:mas|porem)\s+(?:eu\s+)?(?:nao|nunca|dispenso)\b', tail):
+        return 'rejected'
+    if re.search(r'\b(?:compar\w*|versus|vs)\b', spoken):
+        return 'comparison'
+    if re.search(r'\b(?:quero|prefiro|escolho|escolhi|escolha|mostre|procuro|preco|valor|custa|tem|qual|quanto|disponibilidade|estoque|promocao)\b', clause):
+        return 'affirmative'
+    return 'mentioned'
+
+
 def _words(value: str) -> set[str]:
     return set(re.findall(r'[a-z0-9]+', normalize(value)))
 
@@ -76,6 +101,8 @@ def validate_catalog_intent(name: str, args: dict, text: str, snapshot, product_
         product = next((p for p in snapshot.tables['products'] if p['product_id'] == pid), None)
         if product is None:
             return False
+        if product_reference(text, product['name']) == 'rejected':
+            return False
         labelled = re.search(r'\bproduto\s+(?:id\s*)?(\d+)\b', normalized)
         return bool((labelled and int(labelled.group(1)) == pid) or
                     normalize(product['name']) in normalized or product_id == pid)
@@ -87,6 +114,8 @@ def validate_catalog_intent(name: str, args: dict, text: str, snapshot, product_
         return False
     explicit_products = [p for p in snapshot.tables['products']
                          if re.search(r'(?<!\w)' + re.escape(normalize(p['name'])) + r'(?!\w)', normalized)]
+    if any(product_reference(text, product['name']) == 'rejected' for product in explicit_products):
+        return False
     negation = (r'(?:nao quero|nao (?:me )?(?:recomende|recomendar|indique|sugira)|'
                 r'nao gosto de|nao o|nao a|sem|exceto)\s+(?:(?:o|a)\s+)?')
     if any(re.search(r'\b' + negation + re.escape(normalize(product['name'])) + r'(?!\w)', normalized)

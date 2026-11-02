@@ -92,7 +92,7 @@ class ArchitectureContracts(unittest.TestCase):
             {'output':[tool('installment_quote', {'amount_brl':'900','installments':2})]},
             {'output':[tool('installment_quote', {'amount_brl':'900','installments':3})]}]
         agent = ConversationAgent(self.snapshot, provider)
-        self.assertIn('2x R$ 450,00', agent.answer('R$ 900 em 2x?', chat_id=1))
+        self.assertIn('2x R$ 450,00', agent.answer('Simule R$ 900 em 2x?', chat_id=1))
         self.assertIn('3x R$ 300,00', agent.answer('Esse valor em 3x?', chat_id=1))
 
     def test_tool_price_category_id_and_ambiguity_are_grounded(self):
@@ -140,7 +140,7 @@ class ArchitectureContracts(unittest.TestCase):
             {'output':[]}, {'output':[tool('installment_quote',{'amount_brl':'900','installments':3})]}]
         agent=ConversationAgent(self.snapshot,provider)
         agent.answer('R$ 900.',chat_id=1)
-        self.assertIn('3x R$ 300,00',agent.answer('E em 3x?',chat_id=1))
+        self.assertIn('informe um único valor',agent.answer('E em 3x?',chat_id=1))
         agent.answer('Agora quero saber sobre teclados.',chat_id=1)
         self.assertIn('informe um único valor',agent.answer('E em 3x?',chat_id=1))
 

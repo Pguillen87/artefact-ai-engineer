@@ -46,7 +46,7 @@ class InstallmentRegressionQA(unittest.TestCase):
                 (['Estou comparando R$ 900 e R$ 1.200.', 'E em 3x, quanto fica?'], '900', 'informe um único valor'),
                 (['Meu orçamento para um violão é R$ 900.', 'Agora quero saber sobre teclados.', 'Quanto fica em 3x?'], '900', 'informe um único valor'),
                 (['Meu orçamento para um violão é R$ 900.', 'Quanto fica esse valor em 3x para teclados?'], '900', 'informe um único valor'),
-                (['Quero saber sobre um produto de R$ 900.', 'Na verdade, R$ 600 em 3x.'], '600', '3x R$ 200,00'),
+                (['Quero saber sobre um produto de R$ 900.', 'Na verdade, quero parcelar R$ 600 em 3x.'], '600', '3x R$ 200,00'),
             ]
             for messages, amount, expected in dialogues:
                 with self.subTest(messages=messages):

@@ -6,7 +6,7 @@ import re
 from .commercial import (has_budget_context, has_explicit_total_intent, has_order_context, money_mentions,
                          extract_installment_count, parse_installment_request,
                          InstallmentRequest)
-from .intent import normalize
+from .intent import normalize, product_reference
 
 
 @dataclass(frozen=True)
@@ -82,7 +82,7 @@ def explicit_customer(text: str, snapshot) -> int | None:
 
 
 def product_installment_followup(text: str) -> bool:
-    return bool(re.fullmatch(r'(?i)\s*(?:e\s+)?(?:em|a)\s+\d{1,2}\s*(?:x|vezes|parcelas?)\s*[?.!]*\s*', text))
+    return bool(re.fullmatch(r'(?i)\s*(?:e\s+)?(?:(?:quanto\s+(?:fica|ficaria|seria)\s+)?(?:esse|este|aquele)\s+produto\s+)?(?:em|a)\s+\d{1,2}\s*(?:x|vezes|parcelas?)\s*[?.!]*\s*', text))
 
 
 def explicit_product(text: str, snapshot):
@@ -90,8 +90,10 @@ def explicit_product(text: str, snapshot):
     if snapshot is None:
         return None
     spoken = normalize(text)
-    matches = [product for product in snapshot.tables['products']
-               if re.search(r'(?<!\w)' + re.escape(normalize(product['name'])) + r'(?!\w)', spoken)]
+    exact = [product for product in snapshot.tables['products']
+             if re.search(r'(?<!\w)' + re.escape(normalize(product['name'])) + r'(?!\w)', spoken)]
+    candidates = exact if exact else snapshot.tables['products']
+    matches = [product for product in candidates if product_reference(text, product['name']) == 'affirmative']
     return matches[0] if len(matches) == 1 else None
 
 

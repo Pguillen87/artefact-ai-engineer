@@ -8,7 +8,7 @@ import time
 from .agent import Agent, CLARIFY, FALLBACK, WRITE_ISOLATION, WRITE_UNCERTAIN
 from .context import explicit_customer, explicit_product, installment_followup, next_context, order_followup, product_followup, product_installment_followup, product_amount_requires_clarification
 from .rendering import render_results
-from .intent import normalize, validate_catalog_intent
+from .intent import normalize, product_reference, validate_catalog_intent
 from .telemetry import event, operation_id
 
 _GREETING = re.compile(r'^(oi|ol[aá]|bom dia|boa tarde|boa noite)[!. ]*$', re.I)
@@ -156,7 +156,8 @@ class ConversationAgent:
                     products = evidence[0]['resultado']
                     if len(products) == 1:
                         resolved_products[products[0]['product_id']] = products[0]
-            if len(resolved_products) == 1 and len(explicitly_mentioned) <= 1 and not comparison:
+            if (len(resolved_products) == 1 and len(explicitly_mentioned) <= 1 and not comparison
+                    and product_reference(text, next(iter(resolved_products.values()))['name']) == 'affirmative'):
                 product = next(iter(resolved_products.values()))
                 current = replace(current, product_id=product['product_id'], product_name=product['name'], origin='catalog')
                 self._remember(self.context, chat_id, current)
