@@ -2,18 +2,26 @@
 from decimal import Decimal, InvalidOperation
 import json
 import re
+import sqlite3
+import time
 import unicodedata
 import urllib.error
 import urllib.request
 
 from .services import Catalog, OrderService, get_policy
 from .commercial import quote_installments, extract_installment_count, parse_installment_request
+from .intent import validate_catalog_intent
+from .context import explicit_product, name_in_text
+from .telemetry import bind_operation, event, operation_id, reset_operation
 
 FALLBACK = 'Desculpe, não consegui consultar os dados agora. Tente novamente.'
+CLARIFY = 'Por favor, esclareça o produto e os filtros que deseja consultar.'
+WRITE_UNCERTAIN = 'Não foi possível confirmar o resultado da solicitação. Consulte a loja antes de tentar novamente.'
+WRITE_ISOLATION = 'Para registrar a revisão, envie esse pedido separadamente das demais consultas.'
 TOOLS = [
- {'type':'function','name':'search_products','description':'Busca produtos no catálogo fictício; retorna preço, promoção e Pix calculados deterministicamente a partir do snapshot. Se o cliente pedir parcelas para um produto, inclua o número de parcelas solicitado.',
+ {'type':'function','name':'search_products','description':'Busca com critérios explicitados pelo cliente: nome, categoria, limite de preço ou disponibilidade. Preserve todos os limites solicitados e não invente produto. Preço e promoção são calculados no snapshot; inclua parcelas somente se solicitadas.',
   'parameters':{'type':'object','properties':{'text':{'type':'string'},'category':{'type':'string'},'min_price':{'type':'string'},'max_price':{'type':'string'},'available_only':{'type':'boolean'},'installments':{'type':'integer'}},'additionalProperties':False}},
- {'type':'function','name':'recommend_products','description':'Recomenda produtos disponíveis dentro dos filtros, priorizando maior preço e mantendo alternativa barata.',
+ {'type':'function','name':'recommend_products','description':'Quando o cliente pedir recomendações, retorna alternativas disponíveis dentro dos filtros explicitados, priorizando maior preço e mantendo alternativa barata.',
   'parameters':{'type':'object','properties':{'text':{'type':'string'},'category':{'type':'string'},'min_price':{'type':'string'},'max_price':{'type':'string'}},'additionalProperties':False}},
  {'type':'function','name':'promotion','description':'Consulta promoção no snapshot de um produto.',
   'parameters':{'type':'object','properties':{'product_id':{'type':'integer'}},'required':['product_id'],'additionalProperties':False}},
@@ -121,19 +129,26 @@ class Agent:
     def __init__(self, snapshot, planner, review_submit=None):
         self.catalog=Catalog(snapshot); self.orders=OrderService(snapshot); self.planner=planner; self.snapshot=snapshot; self.review_submit=review_submit
 
-    def answer(self, text):
+    def answer(self, text, *, installment_request=None, product_id=None, customer_id=None, structured=False, correlation_id=None, count_text=None):
+        correlation_id = correlation_id or operation_id()
         if not isinstance(text,str) or not text.strip() or len(text)>2000:
             return FALLBACK
         try:
             plan=self.planner.plan(text)
             if not isinstance(plan,list) or not 1 <= len(plan) <= 3:
                 return FALLBACK
+            if len(plan) != 1 and any(name == 'request_technical_review' for name, _ in plan):
+                return WRITE_ISOLATION
             seen=set(); results=[]
             for name,args in plan:
                 if not isinstance(args,dict): return FALLBACK
+                args = dict(args)
                 signature=json.dumps([name,args],sort_keys=True,ensure_ascii=True)
                 if signature in seen: return FALLBACK
                 seen.add(signature)
+                if name in {'search_products','recommend_products','promotion'} and not validate_catalog_intent(name,args,text,self.snapshot,product_id):
+                    event(correlation_id,'agent','ground','validation','failure',action=name)
+                    return CLARIFY
                 if name in {'search_products','recommend_products'} and set(args) <= ({'text','category','min_price','max_price','available_only','installments'} if name=='search_products' else {'text','category','min_price','max_price'}):
                     if any(not isinstance(args[k],str) or len(args[k])>200 for k in ('text','category') if k in args): return FALLBACK
                     if 'available_only' in args and not isinstance(args['available_only'],bool): return FALLBACK
@@ -143,10 +158,17 @@ class Agent:
                             args[key]=Decimal(args[key])
                     count=args.pop('installments',None)
                     if count is not None:
-                        if name!='search_products' or type(count) is not int or not 1 <= count <= 12 or extract_installment_count(text) != count:
+                        if name!='search_products' or type(count) is not int or not 1 <= count <= 12 or extract_installment_count(count_text if count_text is not None else text) != count:
                             return FALLBACK
-                    if name=='recommend_products': args['available_only']=True
+                    if name=='recommend_products':
+                        args['available_only']=True
+                        args['allow_unfiltered']=True
                     result=self.catalog.search(**args,limit=5)
+                    if name=='search_products':
+                        explicit = explicit_product(text,self.snapshot)
+                        resolved_id = product_id if product_id is not None else explicit['product_id'] if explicit else None
+                        if resolved_id is not None:
+                            result=tuple(item for item in result if item['product_id']==resolved_id)
                     if count is not None:
                         result=tuple(_attach_installment_quote(item,count) for item in result)
                 elif name=='promotion' and set(args)=={'product_id'} and type(args['product_id']) is int:
@@ -154,7 +176,7 @@ class Agent:
                 elif name=='installment_quote' and set(args)=={'amount_brl','installments'}:
                     if not isinstance(args['amount_brl'],str) or len(args['amount_brl'])>20 or type(args['installments']) is not int:
                         return FALLBACK
-                    requested=parse_installment_request(text)
+                    requested=installment_request or parse_installment_request(text)
                     if requested is None:
                         result={'status':'clarification'}
                     else:
@@ -179,17 +201,29 @@ class Agent:
                         result={'clarification':clarification}
                         results.append({'consulta':name,'resultado':result})
                         continue
-                    case=self.review_submit(pid,field,reason,self.snapshot.catalog_version)
-                    if type(case) is not int or case <= 0: return FALLBACK
+                    try:
+                        case=self.review_submit(pid,field,reason,self.snapshot.catalog_version)
+                    except (ValueError, TypeError, OSError, TimeoutError, sqlite3.Error) as exc:
+                        event(correlation_id,'review','submit','integration','uncertain',error=exc,side_effect='unknown')
+                        return WRITE_UNCERTAIN
+                    if type(case) is not int or case <= 0:
+                        event(correlation_id,'review','submit','integration','uncertain',side_effect='unknown')
+                        return WRITE_UNCERTAIN
+                    event(correlation_id,'review','submit','write','success',side_effect='committed')
                     result={'registered':True,'case_id':case}
                 elif name=='orders' and set(args)=={'full_name'} and isinstance(args['full_name'],str) and 1<len(args['full_name'])<=200:
                     # Name must have been supplied by the user, not invented by the model.
-                    if args['full_name'].casefold() not in text.casefold(): return FALLBACK
+                    if not name_in_text(text,args['full_name']):
+                        matches=[c for c in self.snapshot.tables['customers'] if c['name'].casefold()==args['full_name'].casefold()]
+                        if customer_id is None or len(matches)!=1 or matches[0]['customer_id']!=customer_id:
+                            return FALLBACK
                     result=self.orders.lookup(args['full_name'])
                 else: return FALLBACK
-                results.append({'consulta':name,'resultado':result})
-            return json.dumps(results,ensure_ascii=False,default=str)
-        except (ValueError,TypeError,KeyError,InvalidOperation,TimeoutError,OSError,urllib.error.URLError):
+                results.append({'consulta':name,'resultado':list(result) if isinstance(result, tuple) else result})
+            return results if structured else json.dumps(results,ensure_ascii=False,default=str)
+        except (ValueError,TypeError,KeyError,InvalidOperation,TimeoutError,OSError,urllib.error.URLError) as exc:
+            category = 'integration' if isinstance(exc, (TimeoutError,OSError,urllib.error.URLError)) else 'validation'
+            event(correlation_id,'agent','execute',category,'failure',error=exc)
             return FALLBACK
 
 
@@ -201,7 +235,14 @@ class TelegramAdapter:
         self.agent=agent;self.send=send;self.seen=set();self.state=state;self.allowed_chat_id=allowed_chat_id
 
     def handle(self, update):
-        update_id=update.get('update_id'); message=update.get('message',{}); chat=message.get('chat',{})
+        op=operation_id(); started=time.monotonic()
+        if not isinstance(update,dict):
+            event(op,'telegram','update','validation','failure')
+            return
+        update_id=update.get('update_id'); message=update.get('message',{})
+        if not isinstance(message,dict) or not isinstance(message.get('chat'),dict):
+            return
+        chat=message['chat']
         if type(update_id) is not int or update_id in self.seen or chat.get('type')!='private' or type(chat.get('id')) is not int:
             return
         if self.allowed_chat_id is not None and chat['id'] != self.allowed_chat_id:
@@ -209,8 +250,29 @@ class TelegramAdapter:
         text=message.get('text')
         if not isinstance(text,str) or not text.strip() or len(text)>2000:
             return
-        if self.state is not None and not self.state.claim_update(update_id):
-            return
-        answer=self.agent.answer(text,chat_id=chat['id']) if self.state is not None else self.agent.answer(text)
-        self.send(chat['id'],answer)
+        try:
+            if self.state is not None and not self.state.claim_update(update_id):
+                return
+        except sqlite3.Error as exc:
+            event(op,'telegram','claim','persistence','failure',error=exc)
+            raise
+        try:
+            token = bind_operation(op)
+            try:
+                answer=self.agent.answer(text,chat_id=chat['id']) if self.state is not None else self.agent.answer(text)
+            finally:
+                reset_operation(token)
+        except Exception as exc:
+            event(op,'telegram','answer','execution','failure',error=exc,
+                  side_effect='claim_committed' if self.state is not None else 'none')
+            raise
+        try:
+            self.send(chat['id'],answer)
+        except Exception as exc:
+            event(op,'telegram','delivery','transport','uncertain',error=exc,
+                  side_effect='claim_committed' if self.state is not None else 'unknown',
+                  duration_ms=int((time.monotonic()-started)*1000))
+            raise
+        event(op,'telegram','delivery','transport','success',
+              side_effect='send_accepted',duration_ms=int((time.monotonic()-started)*1000))
         self.seen.add(update_id)

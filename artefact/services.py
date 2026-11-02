@@ -56,8 +56,15 @@ class Catalog:
         return {'status':'none_available', **result, 'pix_price_brl':pix_price(price, False),
                 'checkout_price_brl':price}
 
-    def search(self, text='', *, category=None, min_price=None, max_price=None, available_only=False, limit=20):
-        query = _name(text)
+    def search(self, text=None, *, category=None, min_price=None, max_price=None, available_only=False, limit=20, allow_unfiltered=False):
+        for value in (text, category):
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise ValueError('empty search criterion')
+        if not isinstance(available_only, bool):
+            raise ValueError('invalid availability filter')
+        if text is None and category is None and min_price is None and max_price is None and not available_only and not allow_unfiltered:
+            raise ValueError('search criterion required')
+        query = _name(text) if text is not None else None
         if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 50:
             raise ValueError('limit must be between 1 and 50')
         for value in (min_price, max_price):
@@ -68,7 +75,9 @@ class Catalog:
         categories = {c['category_id']: _name(c['name']) for c in self._snapshot.tables['categories']}
         found = []
         for p in self._snapshot.tables['products']:
-            if query not in _name(p['name']) or (category and categories[p['category_id']] != _name(category)):
+            if (query is not None and query not in _name(p['name'])) or (category is not None and categories[p['category_id']] != _name(category)):
+                continue
+            if (min_price is not None or max_price is not None) and p.get('price_brl') is None:
                 continue
             if min_price is not None and p['price_brl'] < min_price or max_price is not None and p['price_brl'] > max_price:
                 continue
@@ -76,7 +85,7 @@ class Catalog:
             if not available_only or item['available']:
                 found.append(item)
         if available_only:
-            found.sort(key=lambda item: (-item['price_brl'], item['product_id']))
+            found.sort(key=lambda item: (item['price_brl'] is None, -(item['price_brl'] or Decimal('0')), item['product_id']))
             if len(found)>limit and limit>1:
                 return tuple(found[:limit-1]+[found[-1]])
         return tuple(found[:limit])

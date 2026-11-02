@@ -52,9 +52,9 @@ class AgentContractTests(unittest.TestCase):
   p=Path(self.tmp.name);write_dataset(p);self.snapshot=load_dataset(p)
  def test_filters_category_price_and_availability(self):
   catalog=Catalog(self.snapshot)
-  self.assertEqual(len(catalog.search('',category='Teclados e Pianos',max_price=Decimal('1200'),available_only=True)),1)
-  self.assertEqual(catalog.search('',category='Teclados e Pianos',max_price=Decimal('100'),available_only=True),())
-  self.assertEqual(catalog.search('',category='Guitarras'),())
+  self.assertEqual(len(catalog.search(category='Teclados e Pianos',max_price=Decimal('1200'),available_only=True)),1)
+  self.assertEqual(catalog.search(category='Teclados e Pianos',max_price=Decimal('100'),available_only=True),())
+  self.assertEqual(catalog.search(category='Guitarras'),())
  def test_order_fields_distinguish_evidence(self):
   order=OrderService(self.snapshot).lookup('Synthetic Customer')[0]
   self.assertEqual(order['items'][0]['name'],'Korg Synth')

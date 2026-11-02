@@ -103,6 +103,7 @@ def _parse(table: str, raw: bytes) -> list[dict]:
                 for field in MONEY.intersection(row):
                     value = Decimal(row[field])
                     if not value.is_finite() or value < 0 or (field == 'discount_percent' and value > 100): raise ValueError(field)
+                    if field in {'price_brl','total_brl'} and value.as_tuple().exponent < -2: raise ValueError(field)
                     row[field] = value
                 for field in DATES.intersection(row):
                     if row[field]: row[field] = date.fromisoformat(row[field])

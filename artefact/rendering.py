@@ -99,6 +99,7 @@ def render_results(results):
         name=entry['consulta'];data=entry['resultado']
         if name in ('search_products','recommend_products'):
             if not isinstance(data,list): raise ValueError('invalid products')
+            if name == 'recommend_products' and data: lines.append('Alternativas disponíveis:')
             for item in data:
                 if not isinstance(item,dict) or type(item.get('stock_quantity')) is not int or type(item.get('available')) is not bool:
                     raise ValueError('invalid product')

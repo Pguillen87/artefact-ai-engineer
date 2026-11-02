@@ -14,6 +14,7 @@ from .data import StructuralError, load_dataset
 from .provider import ResponsesProvider
 from .state import State
 from .telegram import TelegramClient, TelegramError
+from .telemetry import configure_logging, event, operation_id
 
 @dataclass(frozen=True)
 class Config:
@@ -26,6 +27,7 @@ class Config:
     output_price: Decimal
     api_key: str = field(repr=False)
     telegram_token: str = field(repr=False)
+    allowed_chat_id: int | None = field(default=None, repr=False)
 
 
 def read_config(env):
@@ -42,17 +44,27 @@ def read_config(env):
             raise ValueError('budget, rates, and call limit must be positive')
     except (InvalidOperation,ValueError):
         raise ValueError('Invalid budget, rates, or call limit') from None
-    return Config(Path(env['ARTEFACT_DATA_DIR']),env['OPENAI_MODEL'],Path(env['ARTEFACT_STATE_PATH']),budget,max_calls,input_price,output_price,env['OPENAI_API_KEY'],env['TELEGRAM_BOT_TOKEN'])
+    chat_id = None
+    if env.get('TELEGRAM_ALLOWED_CHAT_ID'):
+        try:
+            chat_id = int(env['TELEGRAM_ALLOWED_CHAT_ID'])
+            if chat_id <= 0: raise ValueError()
+        except ValueError:
+            raise ValueError('TELEGRAM_ALLOWED_CHAT_ID deve ser um inteiro positivo') from None
+    return Config(Path(env['ARTEFACT_DATA_DIR']),env['OPENAI_MODEL'],Path(env['ARTEFACT_STATE_PATH']),budget,max_calls,input_price,output_price,env['OPENAI_API_KEY'],env['TELEGRAM_BOT_TOKEN'],chat_id)
 
 
 def main():
+    configure_logging()
     try:
         config=read_config(os.environ)
         snapshot=load_dataset(config.data_dir,verify_baseline=True)
         client=TelegramClient(config.telegram_token)
         state=State(config.state_path)
         provider=ResponsesProvider(config.api_key,config.model,state,config.budget,config.max_calls,config.input_price,config.output_price)
-        adapter=TelegramAdapter(ConversationAgent(snapshot,provider,snapshot_loader=(lambda: published_snapshot(Path(os.environ['ARTEFACT_CATALOG_DB']),snapshot)) if os.environ.get('ARTEFACT_CATALOG_DB') else None,review_submit=configured_review_client(os.environ)),client.send,state=state)
+        adapter=TelegramAdapter(ConversationAgent(snapshot,provider,snapshot_loader=(lambda: published_snapshot(Path(os.environ['ARTEFACT_CATALOG_DB']),snapshot)) if os.environ.get('ARTEFACT_CATALOG_DB') else None,review_submit=configured_review_client(os.environ)),client.send,state=state,allowed_chat_id=config.allowed_chat_id)
+        if config.allowed_chat_id is None:
+            event(operation_id(),'telegram','configuration','access','uncertain')
     except (ValueError,StructuralError) as exc:
         print(str(exc),file=sys.stderr)
         return 2
@@ -64,7 +76,8 @@ def main():
                     adapter.handle(update)
                     if type(update.get('update_id')) is int:
                         offset=max(offset,update['update_id']+1)
-            except TelegramError:
+            except TelegramError as exc:
+                event(operation_id(),'telegram','poll','transport','failure',error=exc)
                 time.sleep(3)
     except KeyboardInterrupt:
         return 0

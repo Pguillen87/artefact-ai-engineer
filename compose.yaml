@@ -6,6 +6,7 @@ services:
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-6-luna}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_ALLOWED_CHAT_ID: ${TELEGRAM_ALLOWED_CHAT_ID:-}
       ENABLE_REAL_LLM: ${ENABLE_REAL_LLM:-0}
       ARTEFACT_STATE_PATH: /state/agent.sqlite
       ARTEFACT_CATALOG_DB: /catalog/catalog.sqlite

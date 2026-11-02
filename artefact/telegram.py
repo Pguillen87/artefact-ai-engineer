@@ -29,7 +29,8 @@ class TelegramClient:
 
     def get_updates(self, offset):
         result=self._call('getUpdates',{'timeout':20,'offset':offset})
-        if not isinstance(result,list): raise TelegramError('Invalid Telegram response')
+        if not isinstance(result,list) or any(not isinstance(item,dict) or type(item.get('update_id')) is not int for item in result):
+            raise TelegramError('Invalid Telegram response')
         return result
 
     def send(self, chat_id, text):

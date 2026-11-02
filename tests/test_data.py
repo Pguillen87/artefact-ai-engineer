@@ -51,6 +51,14 @@ class DataTests(unittest.TestCase):
    with self.subTest(changes=changes), TemporaryDirectory() as d:
     root=Path(d);write_dataset(root,changes)
     with self.assertRaises(StructuralError): load_dataset(root)
+ def test_subcent_currency_rejected_without_limiting_discount_precision(self):
+  for changes in ({'products':{'price_brl':'100.001'}}, {'orders':{'total_brl':'100.001'}}, {'products':{'price_brl':'100.000'}}):
+   with self.subTest(changes=changes), TemporaryDirectory() as d:
+    root=Path(d);write_dataset(root,changes)
+    with self.assertRaises(StructuralError): load_dataset(root)
+  with TemporaryDirectory() as d:
+   root=Path(d);write_dataset(root,{'promotions':{'discount_percent':'7.125'}})
+   self.assertEqual(load_dataset(root).tables['promotions'][0]['discount_percent'],Decimal('7.125'))
  def test_duplicate_key_and_missing_header_are_rejected(self):
   with TemporaryDirectory() as d:
    root=Path(d);write_dataset(root,extra={'products':ROWS['products']})
@@ -104,7 +112,7 @@ class DataTests(unittest.TestCase):
   provider.request.return_value={'output':[
    {'type':'function_call','name':'search_products','arguments':json.dumps({'text':item['name']}),'call_id':'product'},
    {'type':'function_call','name':'policy','arguments':'{"topic":"pix"}','call_id':'pix'}]}
-  answer=ConversationAgent(snapshot,provider).answer('Posso adicionar 5% Pix ao produto em promoção?')
+  answer=ConversationAgent(snapshot,provider).answer('Posso adicionar 5% Pix ao '+item['name']+' em promoção?')
   self.assertIn('R$ 323,10',answer)
   self.assertIn('não acumula',answer.lower())
   self.assertNotIn('R$ 306,95',answer)

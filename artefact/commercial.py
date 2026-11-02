@@ -110,6 +110,25 @@ def _parse_brl_token(value: str) -> Decimal | None:
     return result
 
 
+def parse_brl_mention(value: str) -> Decimal | None:
+    """Remove sentence punctuation only when the preceding numeric token is complete."""
+    if value.endswith('.') and not value.endswith('..'):
+        value = value[:-1]
+    elif re.search(r'[.,]\d{2,3},$', value):
+        value = value[:-1]
+    return _parse_brl_token(value)
+
+
+def money_mentions(text: str) -> tuple[Decimal | None, ...]:
+    if not isinstance(text, str):
+        return ()
+    return tuple(parse_brl_mention(match.group(1)) for match in _MONEY.finditer(text))
+
+
+def has_order_context(text: str) -> bool:
+    return bool(_ORDER_TOTAL_CONTEXT.search(text))
+
+
 def extract_installment_count(text: str) -> int | None:
     if not isinstance(text, str) or _ORDER_TOTAL_CONTEXT.search(text):
         return None
@@ -132,6 +151,8 @@ def parse_installment_request(text: str) -> InstallmentRequest | None:
     """Read one explicit BRL amount and one count; refuse order-history or ambiguous amounts."""
     if not isinstance(text, str) or _ORDER_TOTAL_CONTEXT.search(text):
         return None
+    if re.search(r'(?i)\b(?:ou|versus|vs)\b', text) or re.search(r'(?i)R\$\s*[0-9][0-9.,]*\s+e\s+(?:R\$\s*)?[0-9]', text):
+        return None
     count = extract_installment_count(text)
     money = list(_MONEY.finditer(text))
     if count is None or len(money) != 1:
@@ -140,10 +161,7 @@ def parse_installment_request(text: str) -> InstallmentRequest | None:
     nearby = text[max(0, match.start() - 30):min(len(text), match.end() + 30)]
     if re.search(r'(?i)frete|envio|entrega', nearby) or _PER_INSTALLMENT_CONTEXT.search(nearby):
         return None
-    token = match.group(1)
-    if token.endswith('.') and not token.endswith('..'):
-        token = token[:-1]
-    amount = _parse_brl_token(token)
+    amount = parse_brl_mention(match.group(1))
     if amount is None:
         return None
     before = text[:match.start()]

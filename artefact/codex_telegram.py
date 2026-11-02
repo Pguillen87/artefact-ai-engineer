@@ -15,6 +15,7 @@ from .admin import published_snapshot
 from .data import StructuralError, load_dataset
 from .state import State
 from .telegram import TelegramClient, TelegramError
+from .telemetry import configure_logging, event, operation_id
 
 @dataclass(frozen=True)
 class HostConfig:
@@ -55,6 +56,7 @@ def poll_once(client,adapter,offset):
 
 
 def main():
+    configure_logging()
     try:
         config=read_host_config(os.environ)
         executable=shutil.which('codex.exe') if os.name=='nt' else shutil.which('codex')
@@ -73,7 +75,8 @@ def main():
     try:
         while True:
             try: offset=poll_once(client,adapter,offset)
-            except TelegramError:
+            except TelegramError as exc:
+                event(operation_id(),'telegram','poll','transport','failure',error=exc)
                 print('Falha temporária no Telegram; nova tentativa.',file=sys.stderr,flush=True)
                 time.sleep(3)
     except KeyboardInterrupt:
