@@ -5,7 +5,7 @@ from decimal import Decimal
 import re
 from typing import Literal
 
-from .commercial import (has_budget_context, has_explicit_total_intent, has_order_context, money_mentions,
+from .commercial import (has_budget_context, has_explicit_total_intent, has_order_context, money_mentions, money_contexts,
                          extract_installment_count, parse_installment_request,
                          InstallmentRequest)
 from .intent import normalize, product_reference, mentioned_products, intent_clauses, clause_polarity, requests_catalog_price, requests_options, mentioned_category_ids
@@ -144,17 +144,18 @@ def resolve_commercial_basis(text: str, snapshot, previous: ConversationContext 
         polarity = clause_polarity(clause)
         clause_products = mentioned_products(clause, snapshot)
         shipping = bool(re.search(r'\b(?:frete|envio|entrega)\b', clause))
-        # Scope monetary roles to their clause. Independent shipping amounts
-        # never become product totals; inseparable mixed clauses stay ambiguous.
-        mixed = shipping and bool(clause_products)
         is_hypothesis = (re.search(r'\bsimul\w*\b', clause) and
                          re.search(r'\bhipotetic\w*\b|\b(?:apenas|somente) como exemplo\b', clause) and
                          polarity == 'affirmative')
         amounts = money_mentions(clause)
         hypothetical = hypothetical or bool(is_hypothesis and amounts and not shipping)
-        for amount in amounts:
-            role = ('ambiguous' if mixed else 'shipping_amount' if shipping else
-                    'budget' if has_budget_context(clause) else
+        for amount, before, after in money_contexts(clause):
+            # A qualifier belongs to its own mention, not to every amount in
+            # the clause. Postposed budget language is considered only when
+            # the prefix has not already identified another cost.
+            local_shipping = bool(re.search(r'\b(?:frete|envio|entrega)\b', before))
+            local_budget = has_budget_context(before + 'R$') or (not local_shipping and has_budget_context(after))
+            role = ('budget' if local_budget else 'shipping_amount' if local_shipping else
                     'hypothetical_total' if is_hypothesis else
                     'claimed_product_price' if products else
                     'declared_total' if has_explicit_total_intent(clause) else
@@ -180,6 +181,12 @@ def resolve_commercial_basis(text: str, snapshot, previous: ConversationContext 
 
     relevant = [value for value in financial if value.role != 'budget']
     budgets = [value for value in financial if value.role == 'budget']
+    budget_requested = has_budget_context(text)
+    unresolved_budget = budget_requested and (len(budgets) != 1 or budgets[0].amount is None or
+                         any(value.role == 'ambiguous' for value in financial))
+    includes_shipping = budget_requested and bool(re.search(r'\binclui\w*\b.{0,30}\b(?:frete|envio|entrega)\b', normalize(text)))
+    if unresolved_budget or includes_shipping:
+        restriction = 'budget_includes_shipping' if includes_shipping else 'budget_unresolved'
     # Scope is mandatory server-side input, independent of optional provider filters.
     categories = mentioned_category_ids(text, snapshot) | frozenset(row['category_id'] for row in products)
     prior_scope = previous.commercial.scope if previous and previous.commercial else CatalogScope()
@@ -193,10 +200,14 @@ def resolve_commercial_basis(text: str, snapshot, previous: ConversationContext 
             excluded.add(row['product_id'])
         elif reference == 'affirmative':
             excluded.discard(row['product_id'])
-    cap = budgets[0].amount if len(budgets) == 1 else inherited.max_price
+    cap = None if unresolved_budget else budgets[0].amount if len(budgets) == 1 else inherited.max_price
     if any(clause_polarity(clause) == 'affirmative' and requests_options(clause) and
            re.search(r'\bacima\b', clause) for clause in clauses):
         cap = None
+        # The already supported explicit override removes the product ceiling;
+        # its separate lower-bound amount is not an unresolved budget ceiling.
+        if restriction == 'budget_unresolved' and len(budgets) == 1 and budgets[0].amount is not None:
+            restriction = None
     selected = tuple(p['product_id'] for p in candidates if p['product_id'] not in excluded)
     scope = CatalogScope(cap, frozenset(excluded), selected, bool(requests_options(text)), categories or inherited.category_ids)
     value = relevant[0] if len(relevant) == 1 else budgets[0] if not relevant and len(budgets) == 1 else None

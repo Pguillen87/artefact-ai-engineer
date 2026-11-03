@@ -127,6 +127,19 @@ def money_mentions(text: str) -> tuple[Decimal | None, ...]:
     return tuple(parse_brl_mention(match.group(1)) for match in _MONEY.finditer(text))
 
 
+def money_contexts(text: str):
+    """Bound each mention's qualifiers by adjacent amounts and phrase separators."""
+    matches = list(_MONEY.finditer(text))
+    for index, match in enumerate(matches):
+        before = text[matches[index - 1].end() if index else 0:match.start()]
+        after = text[match.end():matches[index + 1].start() if index + 1 < len(matches) else len(text)]
+        # The normalized copula "é" is also "e". A terminal e immediately
+        # before the amount is not a separator introducing another qualifier.
+        prefix = re.split(r',|\b(?:e|ou)\b(?=\s+\S)', before)[-1]
+        suffix = re.split(r',|\b(?:e|ou)\b', after)[0]
+        yield parse_brl_mention(match.group(1)), prefix, suffix
+
+
 def has_order_context(text: str) -> bool:
     return bool(_ORDER_TOTAL_CONTEXT.search(text))
 

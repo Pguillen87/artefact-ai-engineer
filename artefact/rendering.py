@@ -180,7 +180,12 @@ def render_results(results):
                 else:
                     lines.append(statement+' Esclareça a base desejada. Quer que eu simule com o preço efetivo do catálogo?')
         elif name=='commercial_clarification':
-            lines.append('Não realizei a cotação: esclareça o produto, a base do valor ou a restrição indicada antes de simular parcelas.')
+            if data.get('reason') == 'budget_unresolved':
+                lines.append('Qual é o valor do orçamento exclusivo para os produtos? Não executei a busca sem um teto definido.')
+            elif data.get('reason') == 'budget_includes_shipping':
+                lines.append('O orçamento inclui frete. Confirme o limite exclusivo para produtos; não subtraí um frete sem verificação e não executei a busca.')
+            else:
+                lines.append('Não realizei a cotação: esclareça o produto, a base do valor ou a restrição indicada antes de simular parcelas.')
         elif name=='execution_clarification':
             lines.append('Nesta consulta, não consegui validar os argumentos da cotação e não a executei; esclareça essa parte e informe um único valor em reais e a quantidade de parcelas desejada.')
         elif name=='clarification':

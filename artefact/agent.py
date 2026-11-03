@@ -88,6 +88,8 @@ def prepare_commercial_call(name, args, text, snapshot, decision, product_id=Non
     The provider can choose either quote route, but cannot choose the price
     source, replace the product, invent arguments, or lift a restriction.
     """
+    if name in {'search_products', 'recommend_products', 'promotion', 'cheapest_product', 'installment_quote'} and decision.restriction in {'budget_unresolved', 'budget_includes_shipping'}:
+        raise ValueError(decision.restriction)
     if name not in {'search_products', 'installment_quote'}:
         return name, args
     quoting = name == 'installment_quote' or 'installments' in args
@@ -215,12 +217,12 @@ class Agent:
             # Normalize the whole plan before the last isolation check. The same
             # transformation helper is used by the conversational caller.
             final_plan = []
-            rejected = set()
+            rejected = {}
             for index, (name, args) in enumerate(plan):
                 try:
                     final_plan.append(prepare_commercial_call(name, dict(args), text, self.snapshot, decision, product_id))
-                except ValueError:
-                    rejected.add(index)
+                except ValueError as exc:
+                    rejected[index] = str(exc)
                     final_plan.append((name, args))
             invalid = validate_execution_plan(final_plan) if final_plan else None
             if invalid:
@@ -239,11 +241,11 @@ class Agent:
                     if decision.mismatch() is not None:
                         clarification = {'consulta': 'price_mismatch', 'resultado': decision.mismatch()}
                     else:
-                        clarification = {'consulta': 'commercial_clarification', 'resultado': {}}
+                        clarification = {'consulta': 'commercial_clarification', 'resultado': {'reason': rejected[index]}}
                     if len(plan) > 1:
                         results.append(clarification)
                         continue
-                    if decision.mismatch() is not None:
+                    if decision.mismatch() is not None or rejected[index] in {'budget_unresolved', 'budget_includes_shipping'}:
                         from .rendering import render_results
                         return render_results([clarification])
                     return CLARIFY
