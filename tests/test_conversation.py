@@ -37,6 +37,37 @@ class ConversationTests(unittest.TestCase):
    answer=ConversationAgent(self.snapshot,provider).answer('Pix?',chat_id=1).lower()
    self.assertNotIn('99%',answer);self.assertIn('5%',answer);provider.request.assert_called_once()
 
+class ConversationTraceTests(unittest.TestCase):
+ def test_trace_records_selected_and_executed_tool_without_arguments(self):
+  with TemporaryDirectory() as d:
+   root=Path(d);write_dataset(root)
+   provider=Mock();provider.request.return_value={'output':[{'type':'function_call','name':'policy','arguments':'{"topic":"pix"}','call_id':'p'}]}
+   agent=ConversationAgent(load_dataset(root),provider)
+   self.assertIn('5%',agent.answer('Qual é o desconto Pix?',chat_id='qa-session'))
+   self.assertEqual(agent.last_trace['selected_tools'],['policy'])
+   self.assertEqual(agent.last_trace['executed_tools'],['policy'])
+   self.assertEqual(agent.last_trace['status'],'success')
+   self.assertNotIn('arguments',agent.last_trace)
+
+ def test_trace_copies_only_provider_sanitized_tool_details(self):
+  with TemporaryDirectory() as d:
+   root=Path(d);write_dataset(root)
+   snapshot=load_dataset(root)
+   provider=Mock();provider.last_tool_summaries=[{'name':'policy','topic':'pix'}]
+   provider.request.return_value={'output':[{'type':'function_call','name':'policy','arguments':'{"topic":"pix"}','call_id':'p'}]}
+   agent=ConversationAgent(snapshot,provider)
+   agent.answer('Qual desconto Pix?',chat_id='qa-session')
+   self.assertEqual(agent.last_trace['tool_details'],[{'name':'policy','topic':'pix'}])
+
+ def test_trace_preserves_safe_provider_failure_code(self):
+  provider=Mock();provider.last_failure='model_unavailable'
+  provider.request.side_effect=ValueError('Codex CLI request failed')
+  agent=ConversationAgent(None,provider)
+  agent.answer('Consulta real',chat_id='qa-session')
+  self.assertEqual(agent.last_trace['status'],'error')
+  self.assertEqual(agent.last_trace['error_code'],'model_unavailable')
+  self.assertNotIn('message',agent.last_trace)
+
 class ProviderTests(unittest.TestCase):
  def test_strict_schema_and_budget_enforced_before_transport(self):
   from decimal import Decimal

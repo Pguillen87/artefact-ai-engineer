@@ -66,6 +66,27 @@ Install and sign in to the official Codex CLI first. Set `CODEX_DEMO_APPROVED=1`
 
 This is a constrained feasibility experiment, not a security certification or a production customer-facing service. The CLI runs on the host, but inference sends prompts and tool results to the remote Codex service; it is not an offline model. Codex plan limits and access can change, the host needs the CLI and an authenticated session, and a command-disabled synthetic test does not prove all future versions immune to prompt injection. The standalone demo uses synthetic data; the host Telegram path was separately exercised with the original fictional baseline, as recorded in Plane.
 
+## Local Codex QA terminal
+
+`python -m artefact.qa_terminal` runs the existing `ConversationAgent` and `CodexLocalProvider` directly on the Windows host, using all six original fictional CSVs after their approved SHA-256 baseline is checked. It does not start another agent, Telegram bot, HTTP service or API-key integration. In PowerShell, set `CODEX_DEMO_APPROVED=1`, `ARTEFACT_DATA_DIR` to the original `data` directory, `CODEX_DEMO_STATE_PATH` to a writable SQLite file outside both the repository and CSV directory, `CODEX_DEMO_MAX_CALLS` to an explicitly approved positive limit, and `CODEX_DEMO_MODEL` to a model accepted by the installed Codex CLI. Then run `python -m artefact.qa_terminal`. The command requires an authenticated local Codex CLI and sends prompts to the remote Codex service; it does not read or export Codex credentials or require `OPENAI_API_KEY`.
+
+Tested PowerShell setup and interactive command:
+
+```powershell
+$env:CODEX_DEMO_APPROVED = '1'
+$env:ARTEFACT_DATA_DIR = 'C:\App\Artefact\Desafio Técnico AI Engineer 2026\data'
+$env:CODEX_DEMO_STATE_PATH = 'C:\App\Artefact\P2-evidencias\codex-qa-terminal-usage.sqlite'
+$env:CODEX_DEMO_MAX_CALLS = '30'
+$env:CODEX_DEMO_MODEL = 'gpt-6-luna'
+python -m artefact.qa_terminal
+```
+
+Batch example: send one JSON object per input line with `session_id` and `message`, then run `python -m artefact.qa_terminal --batch-jsonl`.
+
+The interactive session supports `/session ID`, `/new`, and `/quit`; each session has bounded, isolated in-memory history that is discarded when the process exits. For automation, pass `--batch-jsonl`, one UTF-8 JSON object per line with exactly `session_id` and `message`; stdout is JSON Lines containing the observed answer, safe tool names and policy topic, status, model, reserved-call count and latency. The local SQLite counter persists across processes and failed CLI calls still consume a reservation. The CLI keeps the provider's explicit model selection, 60-second call timeout, read-only sandbox, temporary working directory, ignored user config, disabled shell and other CLI features, and environment-variable allowlist. Do not use real customer data: order lookup remains limited to the fictional challenge dataset and is not authentication.
+
+For Hermes, launch host `python -m artefact.qa_terminal` as a child process with this repository as its working directory and the five variables above in the child environment; Hermes' isolated Python should not import `artefact` directly. On the checked host, the Hermes processes and the QA shell run as the same Windows account, the checkout ACL permits access, and Python can start the CLI. Hermes' own permission to launch child processes was not exercised here, and this host check is not an independent Hermes evaluation.
+
 ## Host-only Codex Telegram test
 
 `python -m artefact.codex_telegram` is an opt-in Windows-host test path for the original fictional challenge dataset. It does not move the Codex session to Docker or alter the Responses API setup. Set `ENABLE_CODEX_TELEGRAM=1`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_CHAT_ID` (one private chat ID), `ARTEFACT_DATA_DIR`, `CODEX_DEMO_STATE_PATH`, a positive `CODEX_DEMO_MAX_CALLS`, and `CODEX_DEMO_MODEL` in the host process. The original six files must match their approved SHA-256 values. Use a dedicated, writable local SQLite state file outside the input directory and repository; it records update claims and aggregate Codex calls, not chat messages or secrets.

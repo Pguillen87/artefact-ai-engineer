@@ -31,6 +31,7 @@ class ConversationAgent:
         self.review_submit = review_submit
         self.history = OrderedDict()
         self.context = OrderedDict()
+        self.last_trace = {'status': 'idle', 'selected_tools': [], 'executed_tools': [], 'tool_details': [], 'error_code': None}
 
     @staticmethod
     def _remember(store, chat_id, value):
@@ -42,15 +43,20 @@ class ConversationAgent:
             store.popitem(last=False)
 
     def answer(self, text, chat_id=None):
+        self.last_trace = {'status': 'pending', 'stage': 'validation', 'model_call': False,
+                           'selected_tools': [], 'executed_tools': [], 'tool_details': [], 'error_code': None}
         op = operation_id()
         started = time.monotonic()
         if not isinstance(text, str) or not text.strip() or len(text) > 2000:
+            self.last_trace.update(status='error', error_code='invalid_message')
             event(op, 'conversation', 'complete', 'validation', 'failure')
             return FALLBACK
         if text.strip() == '/start' or _GREETING.fullmatch(text.strip()):
+            self.last_trace.update(status='local', stage='greeting')
             event(op, 'conversation', 'complete', 'conversation', 'success')
             return 'Olá! Como posso ajudar com instrumentos, pedidos ou políticas da loja?'
         if re.fullmatch(r'(o que voc[eê] faz|quem [eé] voc[eê]|como voc[eê] pode ajudar)[?! .]*', text.strip(), re.I):
+            self.last_trace.update(status='local', stage='capabilities')
             event(op, 'conversation', 'complete', 'conversation', 'success')
             return 'Posso ajudar com produtos, pedidos fictícios e políticas da loja.'
 
@@ -82,6 +88,7 @@ class ConversationAgent:
                 self._remember(self.context, chat_id, current)
             stage = 'provider'
             response = self.provider.request(messages)
+            self.last_trace.update(model_call=True, stage=stage)
             output = response.get('output')
             if not isinstance(output, list):
                 raise ValueError('invalid provider output')
@@ -89,16 +96,25 @@ class ConversationAgent:
                 raise ValueError('invalid provider item')
             event(op, 'provider', 'select', 'provider', 'success')
             calls = [item for item in output if isinstance(item, dict) and item.get('type') == 'function_call']
+            self.last_trace['selected_tools'] = [item.get('name') for item in calls
+                                                  if isinstance(item.get('name'), str)][:3]
+            details = getattr(self.provider, 'last_tool_summaries', [])
+            if isinstance(details, list):
+                self.last_trace['tool_details'] = [dict(item) for item in details[:3]
+                                                   if isinstance(item, dict) and isinstance(item.get('name'), str)]
             if not calls:
                 answer = 'Posso ajudar com produtos, pedidos e políticas da loja. O que você gostaria de saber?'
+                self.last_trace.update(status='no_tool', stage='complete')
                 self._remember(self.history, chat_id, (messages + [{'role': 'assistant', 'content': answer}])[-6:])
                 event(op, 'conversation', 'complete', 'conversation', 'success', duration_ms=int((time.monotonic()-started)*1000))
                 return answer
             if len(calls) > 3:
+                self.last_trace.update(status='error', error_code='invalid_tool_plan')
                 event(op, 'conversation', 'plan', 'validation', 'failure')
                 event(op, 'conversation', 'complete', 'validation', 'failure')
                 return FALLBACK
             if len(calls) > 1 and any(c.get('name') == 'request_technical_review' for c in calls):
+                self.last_trace.update(status='error', error_code='tool_isolation')
                 event(op, 'conversation', 'plan', 'validation', 'failure')
                 event(op, 'conversation', 'complete', 'validation', 'failure')
                 return WRITE_ISOLATION
@@ -140,6 +156,12 @@ class ConversationAgent:
                     customer_id=customer_id if customer_id is not None else prior.customer_id if prior and order_followup(text) else None,
                     structured=True, correlation_id=op, count_text=text)
                 if isinstance(evidence, str):
+                    if evidence == CLARIFY:
+                        self.last_trace.update(status='clarification', error_code=None)
+                    elif evidence == WRITE_UNCERTAIN:
+                        self.last_trace.update(status='uncertain', error_code='tool_failed')
+                    else:
+                        self.last_trace.update(status='tool_error', error_code='tool_failed')
                     category = 'validation' if evidence == CLARIFY else 'integration' if evidence == WRITE_UNCERTAIN else 'tool'
                     event(op, 'conversation', 'tool', category, 'uncertain' if evidence == WRITE_UNCERTAIN else 'failure',
                           side_effect='unknown' if evidence == WRITE_UNCERTAIN else 'none', action=plan.name)
@@ -147,6 +169,7 @@ class ConversationAgent:
                           side_effect='unknown' if evidence == WRITE_UNCERTAIN else 'none')
                     return evidence
                 results.extend(evidence)
+                self.last_trace['executed_tools'].append(plan.name)
                 written = any(item['consulta'] == 'request_technical_review' and
                               isinstance(item['resultado'], dict) and item['resultado'].get('registered') is True
                               for item in evidence)
@@ -165,6 +188,7 @@ class ConversationAgent:
                 current = replace(current, product_id=None, product_name=None)
                 self._remember(self.context, chat_id, current)
             if all(item.get('resultado') in (None, [], (), {}) for item in results):
+                self.last_trace.update(status='empty', stage='complete')
                 event(op, 'conversation', 'complete', 'tool', 'empty', duration_ms=int((time.monotonic()-started)*1000))
                 return 'Não encontrei informações suficientes para essa consulta.'
             stage = 'render'
@@ -173,10 +197,18 @@ class ConversationAgent:
                 event(op, 'conversation', 'complete', 'validation', 'failure', side_effect='committed' if written else 'none', duration_ms=int((time.monotonic()-started)*1000))
                 return 'A resposta é longa demais. Por favor, refine sua consulta.'
             self._remember(self.history, chat_id, (messages + [{'role': 'assistant', 'content': answer}])[-6:])
+            self.last_trace.update(status='success', stage='complete', error_code=None)
             event(op, 'conversation', 'complete', 'tool', 'success',
                   side_effect='committed' if written else 'none', duration_ms=int((time.monotonic()-started)*1000))
             return answer
         except Exception as exc:
+            failure = getattr(self.provider, 'last_failure', None)
+            if not failure:
+                failure = {'provider': 'provider_failed', 'snapshot': 'data_snapshot_error',
+                           'plan': 'invalid_tool_plan', 'tool': 'tool_failed',
+                           'render': 'render_failed'}.get(stage, 'agent_failed')
+            self.last_trace.update(status='error', stage=stage, error_code=failure,
+                                   error_type=type(exc).__name__)
             category = 'provider' if stage == 'provider' else 'persistence' if stage == 'snapshot' else 'validation' if stage == 'plan' else 'execution'
             event(op, 'conversation', stage, category, 'failure', error=exc,
                   side_effect='committed' if written else 'none', duration_ms=int((time.monotonic()-started)*1000))
