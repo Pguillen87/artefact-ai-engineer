@@ -1,104 +1,204 @@
 """Small, per-chat operational references; never stores conversation transcripts."""
-from dataclasses import dataclass
+from __future__ import annotations
+from dataclasses import dataclass, replace
 from decimal import Decimal
 import re
+from typing import Literal
 
 from .commercial import (has_budget_context, has_explicit_total_intent, has_order_context, money_mentions,
                          extract_installment_count, parse_installment_request,
                          InstallmentRequest)
-from .intent import normalize, product_reference
+from .intent import normalize, product_reference, mentioned_products, intent_clauses, clause_polarity
 from .services import Catalog
 
 
 @dataclass(frozen=True)
 class ConversationContext:
-    amount: Decimal | None = None
-    amount_role: str | None = None
     product_id: int | None = None
     product_name: str | None = None
     turn: int = 0
     origin: str = 'user'
     customer_id: int | None = None
     policy_topic: str | None = None
+    commercial: CommercialBasis | None = None
+
+
+@dataclass(frozen=True)
+class MonetaryValue:
+    amount: Decimal | None
+    role: Literal['budget', 'hypothetical_total', 'declared_total', 'claimed_product_price',
+                  'shipping_amount', 'per_installment', 'stated_price', 'ambiguous']
 
 
 @dataclass(frozen=True)
 class CommercialBasis:
-    kind: str
+    kind: Literal['catalog', 'hypothetical', 'total', 'budget', 'ambiguous', 'restricted', 'none']
     amount: Decimal | None = None
     product: dict | None = None
     catalog_amount: Decimal | None = None
     amount_role: str | None = None
     total_amount: Decimal | None = None
+    count: int | None = None
+    restriction: str | None = None
+    values: tuple[MonetaryValue, ...] = ()
+    source: str = 'user'
+
+    @property
+    def price_source(self) -> str | None:
+        if self.kind == 'catalog':
+            return 'catalog_snapshot'
+        if self.kind in {'hypothetical', 'total'}:
+            return 'explicit_user_total'
+        return None
+
+    @property
+    def allows_catalog_options(self) -> bool:
+        """A budget filters catalog prices; it never becomes their quoted total."""
+        return self.kind == 'budget' and self.restriction is None and self.count is not None
+
+    @property
+    def quote_allowed(self) -> bool:
+        return (self.restriction is None and self.count is not None and
+                self.kind in {'catalog', 'hypothetical', 'total'} and
+                self.quote_amount is not None)
+
+    @property
+    def quote_amount(self) -> Decimal | None:
+        return self.catalog_amount if self.kind == 'catalog' else self.total_amount
+
+    def request(self) -> InstallmentRequest | None:
+        if not self.quote_allowed:
+            return None
+        stated = self.amount if self.amount_role == 'per_installment' else self.quote_amount
+        return InstallmentRequest(stated, self.quote_amount,
+                                  self.amount if self.amount_role == 'per_installment' else None, self.count)
+
+    def mismatch(self) -> dict | None:
+        compared = self.total_amount if self.amount_role == 'per_installment' else self.amount
+        if (self.product is None or compared is None or self.catalog_amount == compared
+                or self.kind in {'hypothetical', 'budget'} or self.amount_role == 'budget_cap'):
+            return None
+        return {'product_name': self.product['name'], 'reported_amount_brl': compared,
+                'reported_per_installment': self.amount_role == 'per_installment',
+                'catalog_amount_brl': self.catalog_amount,
+                'catalog_quote_authorized': self.kind == 'catalog' and self.restriction is None}
 
 
 def confirms_catalog_price(text: str) -> bool:
     """Only explicit affirmative confirmation within a single clause grants authority."""
-    for clause in re.split(r'\.(?!\d)|[!?;]', normalize(text)):
+    for clause in intent_clauses(text):
         if not re.search(r'\bcatalogo\b', clause):
             continue
-        clause = re.sub(r'\bsem juros\b', '', clause)
-        if re.search(r'\b(?:nao|nunca|sem|evite|proibido|se|caso|talvez|incorret\w*|errad\w*|fals\w*)\b', clause):
+        if clause_polarity(clause) != 'affirmative' or re.search(r'\b(?:incorret\w*|errad\w*|fals\w*)\b', clause):
             continue
         if re.search(r'\b(?:confirme|confirmo|confirmar|utilize|usar|use)\b', clause):
             return True
     return False
 
 
-def resolve_commercial_basis(text: str, snapshot) -> CommercialBasis:
-    """Choose a price source independently of the provider's proposed tool."""
-    spoken = normalize(text)
-    amounts = money_mentions(text)
-    amount = amounts[0] if len(amounts) == 1 else None
-    per_installment = bool(re.search(r'\b(?:cada|por)\s+parcela\b|\b\d{1,2}\s*(?:x|vezes|parcelas?)\s+de\s*r\$', spoken))
-    parsed = parse_installment_request(text)
-    total = parsed.total_amount if parsed else None
-    role = ('per_installment' if per_installment else 'total' if amount is not None and has_explicit_total_intent(text)
-            else 'ambiguous' if amount is not None else None)
-    if has_budget_context(text):
-        if len(amounts) > 1:
-            return CommercialBasis('ambiguous', amount_role='ambiguous')
-        return CommercialBasis('budget', amount, amount_role='budget_cap')
-    products = []
-    exact_products = []
-    product_mentioned = False
-    if snapshot is not None:
-        for product in snapshot.tables['products']:
-            name = normalize(product['name'])
-            first = name.split()[0]
-            exact = re.search(r'(?<!\w)' + re.escape(name) + r'(?!\w)', spoken)
-            mentioned = exact or (len(first) >= 3 and re.search(r'(?<!\w)' + re.escape(first) + r'(?!\w)', spoken))
-            if mentioned:
-                product_mentioned = True
-                if product_reference(text, product['name']) != 'rejected':
-                    products.append(product)
-                    if exact:
-                        exact_products.append(product)
-    if exact_products:
-        products = exact_products
-    product = products[0] if len(products) == 1 else None
-    catalog = Catalog(snapshot).product(product['product_id']) if product is not None else None
+def resolve_commercial_basis(text: str, snapshot, previous: ConversationContext | None = None) -> CommercialBasis:
+    """Resolve source, meaning and restrictions once, before any tool is selected.
+
+    Unknown language remains unquotable. Context is only inherited by bounded
+    follow-ups; an explicit new product request is evaluated on its own merits.
+    """
+    products = mentioned_products(text, snapshot)
+    count_text = normalize(text)
+    for product in products:
+        count_text = count_text.replace(normalize(product['name']), '')
+    count = extract_installment_count(count_text)
+    if previous and previous.commercial and (_FOLLOWUP.fullmatch(text) or product_followup(text) or product_installment_followup(text)):
+        prior = previous.commercial
+        if prior.restriction is None and prior.amount_role == 'stated_price' and re.search(r'\b(?:esse|este|aquele) valor\b', normalize(text)):
+            return replace(prior, kind='total', total_amount=prior.amount, count=count, source='session')
+        if prior.amount_role == 'per_installment' and prior.kind != 'hypothetical':
+            return CommercialBasis('ambiguous', count=count, restriction='ambiguous_reference', source='session')
+        catalog = Catalog(snapshot).product(prior.product['product_id']) if prior.product else None
+        return replace(prior, count=count,
+                       amount=prior.total_amount if prior.amount_role == 'per_installment' else prior.amount,
+                       amount_role='total' if prior.amount_role == 'per_installment' else prior.amount_role,
+                       catalog_amount=catalog['price_quote'].get('checkout_price_brl') if catalog else None,
+                       source='session')
+
+    clauses = intent_clauses(text)
+    candidates = [p for p in products if product_reference(text, p['name']) != 'rejected']
+    product = candidates[0] if len(candidates) == 1 else products[0] if len(products) == 1 else None
+    catalog = Catalog(snapshot).product(product['product_id']) if product else None
     catalog_amount = catalog['price_quote'].get('checkout_price_brl') if catalog else None
-    hypothetical = any(
-        re.search(r'\bsimul\w*\b', clause) and re.search(r'\bhipotetic\w*\b', clause)
-        and not re.search(r'\bnao\s+(?:quero\s+)?simul\w*\b', clause)
-        and not re.search(r'\b(?:nao|nunca|sem)\b.{0,60}\bhipotetic\w*\b', clause)
-        for clause in re.split(r'\.(?!\d)|[!?;]', spoken))
-    if hypothetical and amount is not None:
-        return CommercialBasis('hypothetical', amount, product, catalog_amount, role, total)
-    if product_mentioned and not products and amounts:
-        return CommercialBasis('ambiguous', amount, amount_role=role, total_amount=total)
-    if products and amounts:
-        comparison_amount = total if per_installment else amount
-        if product is None or comparison_amount is None or catalog_amount is None or comparison_amount != catalog_amount:
-            return CommercialBasis('catalog' if product and confirms_catalog_price(text) else 'ambiguous',
-                                   amount, product, catalog_amount, role, total)
-        return CommercialBasis('catalog', amount, product, catalog_amount, role, total)
-    if product is not None:
-        return CommercialBasis('catalog', None, product, catalog_amount)
-    if amount is not None and has_explicit_total_intent(text):
-        return CommercialBasis('total', amount, amount_role=role, total_amount=total)
-    return CommercialBasis('none', amount, amount_role=role, total_amount=total)
+    values = []
+    financial = []
+    hypothetical = False
+    restriction = None
+    for clause in clauses:
+        polarity = clause_polarity(clause)
+        clause_products = mentioned_products(clause, snapshot)
+        shipping = bool(re.search(r'\b(?:frete|envio|entrega)\b', clause))
+        # Scope monetary roles to their clause. Independent shipping amounts
+        # never become product totals; inseparable mixed clauses stay ambiguous.
+        mixed = shipping and bool(clause_products)
+        is_hypothesis = (re.search(r'\bsimul\w*\b', clause) and
+                         re.search(r'\bhipotetic\w*\b|\b(?:apenas|somente) como exemplo\b', clause) and
+                         polarity == 'affirmative')
+        amounts = money_mentions(clause)
+        hypothetical = hypothetical or bool(is_hypothesis and amounts and not shipping)
+        for amount in amounts:
+            role = ('ambiguous' if mixed else 'shipping_amount' if shipping else
+                    'budget' if has_budget_context(clause) else
+                    'hypothetical_total' if is_hypothesis else
+                    'claimed_product_price' if products else
+                    'declared_total' if has_explicit_total_intent(clause) else
+                    'stated_price' if re.search(r'\binstrumento de r\$', clause) else 'ambiguous')
+            per_part = bool(re.search(r'\b(?:cada|por)\s+parcela\b|\b\d{1,2}\s*(?:x|vezes|parcelas?)\s+de\s*r\$', clause))
+            if per_part and role not in {'budget', 'shipping_amount'}:
+                role = 'per_installment'
+            value = MonetaryValue(amount, role)
+            values.append(value)
+            if role != 'shipping_amount':
+                financial.append(value)
+        concerns_product = not clause_products or product is None or any(p['product_id'] == product['product_id'] for p in clause_products)
+        commercial_clause = concerns_product and (
+            bool(re.search(r'\b(?:catalogo|preco|simul\w*|parcel\w*)\b', clause)) or
+            (bool(clause_products or amounts) and not shipping))
+        if commercial_clause:
+            if polarity in {'negative', 'conditional', 'incidental'}:
+                restriction = polarity
+            elif re.search(r'\b(?:incorret\w*|errad\w*|fals\w*)\b', clause):
+                restriction = 'disputed_price'
+
+    relevant = [value for value in financial if value.role != 'budget']
+    budgets = [value for value in financial if value.role == 'budget']
+    value = relevant[0] if len(relevant) == 1 else budgets[0] if not relevant and len(budgets) == 1 else None
+    amount = value.amount if value else None
+    role = value.role if value else 'ambiguous' if financial else None
+    per_part = role == 'per_installment'
+    total = amount * count if amount is not None and per_part and count else amount
+    common = dict(amount=amount, product=product, catalog_amount=catalog_amount,
+                  amount_role='per_installment' if per_part else 'total' if role == 'declared_total' else
+                              'budget_cap' if role == 'budget' else 'stated_price' if role == 'stated_price' else 'ambiguous' if amount is not None else None,
+                  total_amount=total, count=count, restriction=restriction, values=tuple(values))
+    if restriction:
+        return CommercialBasis('ambiguous' if amount is not None else 'restricted', **common)
+    if hypothetical and amount is not None and len(relevant) == 1:
+        return CommercialBasis('hypothetical', **common)
+    if budgets and not relevant:
+        return CommercialBasis('catalog' if product else 'budget', **common)
+    if products:
+        if product is None:
+            return CommercialBasis('ambiguous', **common)
+        if financial and (len(relevant) != 1 or amount is None or total != catalog_amount):
+            return CommercialBasis('catalog' if confirms_catalog_price(text) else 'ambiguous', **common)
+        if product_reference(text, product['name']) not in {'affirmative', 'mentioned'}:
+            return CommercialBasis('ambiguous', **common)
+        if product_reference(text, product['name']) == 'mentioned' and count is None:
+            return CommercialBasis('none', **common)
+        return CommercialBasis('catalog', **common)
+    if amount is not None and role in {'declared_total', 'per_installment'} and not has_order_context(text):
+        # Reuse the existing lexical request contract, rather than introducing a
+        # permissive second parser for standalone monetary simulations.
+        request = parse_installment_request(text)
+        if request is not None or (count is None and role == 'declared_total'):
+            return CommercialBasis('total', **common)
+    return CommercialBasis('ambiguous' if financial else 'none', **common)
 
 
 _FOLLOWUP = re.compile(
@@ -109,23 +209,6 @@ _PRODUCT_FOLLOWUP = re.compile(
     r'(?i)^\s*(?:e\s+)?(?:qual\s+)?(?:o\s+)?'
     r'(?:pre[cç]o|produto|promo[cç][aã]o|estoque|disponibilidade)'
     r'(?:\s+(?:dele|dela|desse|deste))?(?:\s+(?:em|a)\s+\d{1,2}\s*(?:x|vezes|parcelas?))?\s*[?.!]*\s*$')
-
-
-def installment_followup(text: str, context: ConversationContext | None) -> InstallmentRequest | None:
-    if not context or context.amount is None or not _FOLLOWUP.fullmatch(text):
-        return None
-    if context.amount_role not in {'total', 'hypothetical'} and not (context.amount_role == 'stated_price' and re.search(r'(?i)\b(?:esse|este|aquele)\s+valor\b', text)):
-        return None
-    count = extract_installment_count(text)
-    if count is None:
-        names = {'um': 1, 'uma': 1, 'dois': 2, 'duas': 2, 'tres': 3, 'quatro': 4,
-                 'cinco': 5, 'seis': 6, 'sete': 7, 'oito': 8, 'nove': 9,
-                 'dez': 10, 'onze': 11, 'doze': 12}
-        count = next((value for word, value in names.items()
-                      if re.search(r'\b' + word + r'\b', normalize(text))), None)
-    if count is None:
-        return None
-    return InstallmentRequest(context.amount, context.amount, None, count)
 
 
 def product_followup(text: str) -> bool:
@@ -163,7 +246,8 @@ def explicit_customer(text: str, snapshot) -> int | None:
 
 
 def product_installment_followup(text: str) -> bool:
-    return bool(re.fullmatch(r'(?i)\s*(?:e\s+)?(?:(?:quanto\s+(?:fica|ficaria|seria)\s+)?(?:esse|este|aquele)\s+produto\s+)?(?:em|a)\s+\d{1,2}\s*(?:x|vezes|parcelas?)\s*[?.!]*\s*', text))
+    shortened = re.sub(r'\b(?:(?:esse|este|aquele)\s+)?produto\s+', '', normalize(text))
+    return bool(_FOLLOWUP.fullmatch(shortened))
 
 
 def pix_policy_followup(text: str) -> bool:
@@ -179,47 +263,20 @@ def explicit_order_id(text: str) -> int | None:
 
 
 def explicit_product(text: str, snapshot):
-    """Resolve only a unique, complete catalog name explicitly present in the turn."""
+    """Resolve a unique affirmative catalog reference, including abbreviations."""
     if snapshot is None:
         return None
-    spoken = normalize(text)
-    exact = [product for product in snapshot.tables['products']
-             if re.search(r'(?<!\w)' + re.escape(normalize(product['name'])) + r'(?!\w)', spoken)]
-    candidates = exact if exact else snapshot.tables['products']
-    matches = [product for product in candidates if product_reference(text, product['name']) == 'affirmative']
+    matches = [product for product in mentioned_products(text, snapshot)
+               if product_reference(text, product['name']) == 'affirmative']
     return matches[0] if len(matches) == 1 else None
 
 
-def product_amount_requires_clarification(text: str, snapshot) -> bool:
-    """A mentioned product does not establish that a stated amount is its price."""
-    return resolve_commercial_basis(text, snapshot).kind == 'ambiguous'
-
-
 def next_context(text: str, previous: ConversationContext | None, turn: int) -> ConversationContext:
+    """Retain only bounded references; commercial meaning belongs to the resolver."""
     if previous and order_followup(text):
         return ConversationContext(turn=turn, customer_id=previous.customer_id)
     if previous and previous.policy_topic == 'pix' and pix_policy_followup(text):
         return ConversationContext(turn=turn, policy_topic='pix')
-    if previous and ((product_followup(text) and previous.product_id is not None) or
-                     (_FOLLOWUP.fullmatch(text) and (previous.amount is not None or previous.product_id is not None))):
-        return ConversationContext(previous.amount, previous.amount_role, previous.product_id,
-                                   previous.product_name, turn, previous.origin)
-    request = parse_installment_request(text)
-    if request:
-        role = 'per_installment' if request.per_installment_amount is not None else 'total'
-        return ConversationContext(request.total_amount, role, turn=turn)
-    if has_order_context(text) or re.search(r'(?i)\b(?:frete|envio|entrega)\b', text):
-        return ConversationContext(turn=turn)
-    if re.search(r'(?i)\b(?:ou|versus|vs)\b', text) or re.search(r'(?i)R\$\s*[0-9][0-9.,]*\s+e\s+(?:R\$\s*)?[0-9]', text):
-        return ConversationContext(turn=turn)
-    amounts = money_mentions(text)
-    if len(amounts) == 1:
-        amount = amounts[0]
-        if amount is not None:
-            spoken = normalize(text)
-            role = ('budget_cap' if has_budget_context(text)
-                    else 'per_installment' if re.search(r'\bparcela\b', spoken)
-                    else 'total' if has_explicit_total_intent(text)
-                    else 'stated_price' if re.search(r'(?i)\binstrumento\s+de\s+r\$', text) else 'unknown')
-            return ConversationContext(amount, role, turn=turn)
+    if previous and (_FOLLOWUP.fullmatch(text) or product_followup(text) or product_installment_followup(text)):
+        return replace(previous, turn=turn)
     return ConversationContext(turn=turn)

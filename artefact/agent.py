@@ -9,9 +9,9 @@ import urllib.error
 import urllib.request
 
 from .services import Catalog, OrderService, get_policy
-from .commercial import quote_installments, extract_installment_count, parse_installment_request, parse_brl_mention
+from .commercial import quote_installments, parse_brl_mention
 from .intent import normalize, validate_catalog_intent, validate_policy_intent, validate_cheapest_intent
-from .context import explicit_product, explicit_order_id, name_in_text, product_amount_requires_clarification, resolve_commercial_basis
+from .context import explicit_product, explicit_order_id, name_in_text, resolve_commercial_basis
 from .telemetry import bind_operation, event, operation_id, reset_operation
 
 FALLBACK = 'Desculpe, não consegui consultar os dados agora. Tente novamente.'
@@ -65,6 +65,70 @@ def _attach_installment_quote(product, count):
         item['installment_quote']=_installment_result(
             quote_installments(price_quote['checkout_price_brl'],count),basis)
     return item
+
+
+def validate_execution_plan(plan):
+    """The same isolation invariant applies to proposed and transformed plans."""
+    if not isinstance(plan, list) or not 1 <= len(plan) <= 3:
+        return FALLBACK
+    if len(plan) != 1 and any(name == 'request_technical_review' for name, _ in plan):
+        return WRITE_ISOLATION
+    return None
+
+
+def prepare_commercial_call(name, args, text, snapshot, decision, product_id=None):
+    """Validate a proposed quote against the resolved decision, then normalize it.
+
+    The provider can choose either quote route, but cannot choose the price
+    source, replace the product, invent arguments, or lift a restriction.
+    """
+    if name not in {'search_products', 'installment_quote'}:
+        return name, args
+    quoting = name == 'installment_quote' or 'installments' in args
+    if name == 'search_products':
+        if not validate_catalog_intent(name, args, text, snapshot, product_id):
+            raise ValueError('ungrounded_catalog')
+        if not set(args) <= {'text', 'category', 'min_price', 'max_price', 'available_only', 'installments'}:
+            raise ValueError('invalid_quote_arguments')
+    else:
+        if (set(args) != {'amount_brl', 'installments'} or not isinstance(args['amount_brl'], str)
+                or len(args['amount_brl']) > 20):
+            raise ValueError('invalid_quote_arguments')
+    if not quoting:
+        if decision.kind == 'ambiguous' and decision.product is not None:
+            raise ValueError('conflicting_price_basis')
+        return name, args
+    catalog_options = (name == 'search_products' and decision.allows_catalog_options and
+                       any(key in args for key in ('category', 'min_price', 'max_price')))
+    if not decision.quote_allowed and not catalog_options:
+        raise ValueError('commercial_basis_not_authorized')
+    if type(args.get('installments')) is not int or args['installments'] != decision.count:
+        raise ValueError('invalid_quote_count')
+    if name == 'installment_quote':
+        request = decision.request()
+        try:
+            supplied = Decimal(args['amount_brl'])
+        except InvalidOperation:
+            raise ValueError('invalid_quote_amount') from None
+        if not supplied.is_finite() or supplied != request.stated_amount:
+            raise ValueError('invalid_quote_amount')
+    elif decision.kind != 'catalog' and not catalog_options:
+        if decision.product is None or not set(args) <= {'text', 'installments'}:
+            raise ValueError('incompatible_quote_plan')
+        request = decision.request()
+        return 'installment_quote', {'amount_brl': format(request.stated_amount, '.2f'), 'installments': request.count}
+    if decision.kind == 'catalog':
+        if decision.product is None:
+            raise ValueError('unresolved_quote_product')
+        if name == 'search_products':
+            # Filters still apply, but only the resolved product may receive a quote.
+            query = args.get('text')
+            if query and not set(re.findall(r'\w+', normalize(query))).issubset(
+                    set(re.findall(r'\w+', normalize(decision.product['name'])))):
+                raise ValueError('incompatible_quote_product')
+        else:
+            return 'search_products', {'text': decision.product['name'], 'installments': decision.count}
+    return name, args
 
 
 def _review_intent(text, product, selected_field, all_products):
@@ -131,16 +195,16 @@ class Agent:
     def __init__(self, snapshot, planner, review_submit=None):
         self.catalog=Catalog(snapshot); self.orders=OrderService(snapshot); self.planner=planner; self.snapshot=snapshot; self.review_submit=review_submit
 
-    def answer(self, text, *, installment_request=None, installment_basis=None, forbid_installment_parse=False, forbid_product_installments=False, product_id=None, customer_id=None, structured=False, correlation_id=None, count_text=None):
+    def answer(self, text, *, product_id=None, customer_id=None, structured=False, correlation_id=None, commercial_decision=None, execution_plan=None):
         correlation_id = correlation_id or operation_id()
         if not isinstance(text,str) or not text.strip() or len(text)>2000:
             return FALLBACK
         try:
             plan=self.planner.plan(text)
-            if not isinstance(plan,list) or not 1 <= len(plan) <= 3:
-                return FALLBACK
-            if len(plan) != 1 and any(name == 'request_technical_review' for name, _ in plan):
-                return WRITE_ISOLATION
+            invalid = validate_execution_plan(plan) or (validate_execution_plan(execution_plan) if execution_plan is not None else None)
+            if invalid:
+                return invalid
+            decision = commercial_decision or resolve_commercial_basis(text, self.snapshot)
             seen=set(); results=[]
             for name,args in plan:
                 if not isinstance(args,dict): return FALLBACK
@@ -148,6 +212,21 @@ class Agent:
                 signature=json.dumps([name,args],sort_keys=True,ensure_ascii=True)
                 if signature in seen: return FALLBACK
                 seen.add(signature)
+                if name in {'search_products', 'installment_quote'}:
+                    try:
+                        name, args = prepare_commercial_call(name, args, text, self.snapshot, decision, product_id)
+                    except ValueError:
+                        if decision.mismatch() is not None:
+                            clarification = {'consulta': 'price_mismatch', 'resultado': decision.mismatch()}
+                        else:
+                            clarification = {'consulta': 'commercial_clarification', 'resultado': {}}
+                        if len(plan) > 1:
+                            results.append(clarification)
+                            continue
+                        if decision.mismatch() is not None:
+                            from .rendering import render_results
+                            return render_results([clarification])
+                        return CLARIFY
                 if name in {'search_products','recommend_products','promotion'} and not validate_catalog_intent(name,args,text,self.snapshot,product_id):
                     event(correlation_id,'agent','ground','validation','failure',action=name)
                     return CLARIFY
@@ -160,12 +239,6 @@ class Agent:
                 elif name in {'search_products','recommend_products'} and set(args) <= ({'text','category','min_price','max_price','available_only','installments'} if name=='search_products' else {'text','category','min_price','max_price'}):
                     if any(not isinstance(args[k],str) or len(args[k])>200 for k in ('text','category') if k in args): return FALLBACK
                     if 'available_only' in args and not isinstance(args['available_only'],bool): return FALLBACK
-                    basis = resolve_commercial_basis(text, self.snapshot)
-                    if name == 'search_products' and basis.kind == 'ambiguous':
-                        query = args.get('text')
-                        if basis.product is None or not query or set(re.findall(r'\w+', normalize(query))).issubset(
-                                set(re.findall(r'\w+', normalize(basis.product['name'])))):
-                            return CLARIFY
                     for key in ('min_price','max_price'):
                         if key in args:
                             if not isinstance(args[key],str) or len(args[key])>20: return FALLBACK
@@ -173,15 +246,6 @@ class Agent:
                             if value is None: return FALLBACK
                             args[key]=value
                     count=args.pop('installments',None)
-                    if count is not None:
-                        if basis.kind in {'ambiguous', 'hypothetical'}:
-                            return CLARIFY
-                        spoken = normalize(text)
-                        named = [row for row in self.snapshot.tables['products'] if normalize(row['name']) in spoken]
-                        if forbid_product_installments or len(named) > 1 or re.search(r'\b(?:compar\w*|versus|vs)\b', spoken):
-                            return CLARIFY
-                        if name!='search_products' or type(count) is not int or not 1 <= count <= 12 or extract_installment_count(count_text if count_text is not None else text) != count:
-                            return FALLBACK
                     if name=='recommend_products':
                         args['available_only']=True
                         args['allow_unfiltered']=True
@@ -196,25 +260,9 @@ class Agent:
                 elif name=='promotion' and set(args)=={'product_id'} and type(args['product_id']) is int:
                     result=self.catalog.promotion(args['product_id'])
                 elif name=='installment_quote' and set(args)=={'amount_brl','installments'}:
-                    if not isinstance(args['amount_brl'],str) or len(args['amount_brl'])>20 or type(args['installments']) is not int:
-                        return FALLBACK
-                    basis = resolve_commercial_basis(text, self.snapshot)
-                    blocked = forbid_installment_parse or product_amount_requires_clarification(text, self.snapshot)
-                    requested=(None if basis.kind == 'ambiguous' or (basis.kind == 'catalog' and basis.product is not None and basis.amount is not None)
-                               else installment_request if blocked else installment_request or parse_installment_request(text))
-                    if requested is None:
-                        result={'status':'clarification'}
-                    else:
-                        try:
-                            supplied=Decimal(args['amount_brl'])
-                        except InvalidOperation:
-                            return FALLBACK
-                        if not supplied.is_finite() or supplied != requested.stated_amount or args['installments'] != requested.count:
-                            return FALLBACK
-                        basis = resolve_commercial_basis(text, self.snapshot)
-                        result=_installment_result(quote_installments(requested.total_amount,requested.count),
-                            'hipotetico' if basis.kind == 'hypothetical' or
-                            (installment_request is not None and installment_basis == 'hipotetico') else 'valor informado pelo cliente')
+                    requested = decision.request()
+                    result=_installment_result(quote_installments(requested.total_amount,requested.count),
+                        'hipotetico' if decision.kind == 'hypothetical' else 'valor informado pelo cliente')
                 elif name=='policy' and set(args)=={'topic'} and isinstance(args['topic'],str):
                     if not validate_policy_intent(args['topic'], text):
                         return CLARIFY

@@ -1,5 +1,5 @@
 """Conservative grounding for proposed catalog operations."""
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 import re
 import unicodedata
 
@@ -11,41 +11,88 @@ def normalize(value: str) -> str:
                             if not unicodedata.combining(ch)).split())
 
 
-def product_reference(text: str, name: str) -> str:
-    """Classify a product mention conservatively; a mention alone grants no selection."""
+def intent_clauses(text: str) -> tuple[str, ...]:
+    """Keep decimal tokens intact and separate independently requested operations."""
+    return tuple(part.strip() for part in re.split(
+        r'\.(?!\d)|[!?;]|\b(?:mas|porem)\b|,?\s+e\s+(?=(?:o\s+frete|quais|qual\b|nao\b|tenho\b|recomende\b))',
+        normalize(text)) if part.strip())
+
+
+def clause_polarity(clause: str) -> str:
+    """Shared conservative polarity for a single operation, not an entire message."""
+    clause = re.sub(r'\bsem juros\b', '', clause)
+    if re.search(r'\b(?:nao|nunca|sem|exceto|evite|dispenso|proibido)\b', clause):
+        return 'negative'
+    if re.search(r'\b(?:se|caso|talvez|quando|apos|depois|desde que)\b', clause):
+        return 'conditional'
+    if re.search(r'\b(?:palavra|texto|exemplo de frase|mencionei)\b', clause):
+        return 'incidental'
+    return 'affirmative'
+
+
+_GENERIC_PRODUCT_WORDS = {'teclado', 'sintetizador', 'arranjador', 'violao', 'guitarra',
+                          'baixo', 'bateria', 'ukulele', 'instrumento', 'digital', 'acustico'}
+
+
+def _product_matches(text: str, name: str):
+    """Return maximal catalog phrases, shared by resolution and polarity."""
+    words = normalize(name).split()
+    matches = {}
+    for size in range(len(words), 0, -1):
+        for start in range(len(words) - size + 1):
+            phrase = words[start:start + size]
+            if not any(len(word) >= 3 and word not in _GENERIC_PRODUCT_WORDS for word in phrase):
+                continue
+            for match in re.finditer(r'(?<!\w)' + re.escape(' '.join(phrase)) + r'(?!\w)', text):
+                matches[(match.start(), match.end())] = match
+    return sorted((match for (start, end), match in matches.items()
+                   if not any(a <= start and end <= b and b - a > end - start for a, b in matches)),
+                  key=lambda match: match.start())
+
+
+def mentioned_products(text: str, snapshot) -> list[dict]:
+    if snapshot is None:
+        return []
     spoken = normalize(text)
-    target = normalize(name)
-    matches = list(re.finditer(r'(?<!\w)' + re.escape(target) + r'(?!\w)', spoken))
-    first = target.split()[0]
-    first_matches = list(re.finditer(r'(?<!\w)' + re.escape(first) + r'(?!\w)', spoken)) if len(first) >= 3 else []
-    if matches:
-        last = matches[-1]
-        if first_matches and first_matches[-1].start() > last.start():
-            candidate = first_matches[-1]
-            prefix = spoken[max(spoken.rfind(mark, 0, candidate.start())
-                                for mark in ('.', ';', '!', '?')) + 1:candidate.start()]
-            if re.search(r'\b(?:nao|nunca|sem|exceto|evite|dispenso)\b', prefix):
-                last = candidate
-        matches = [last]
-    elif first_matches:
-        matches = first_matches
-    if not matches:
-        return 'unmentioned'
-    match = matches[-1]
-    start = max(spoken.rfind(mark, 0, match.start()) for mark in ('.', ';', '!', '?')) + 1
-    clause = spoken[start:match.start()]
-    if re.search(r'\b(?:nao|nunca|sem|exceto|evite|dispenso)\b', clause):
-        return 'rejected'
-    tail = re.split(r'[.!?;]', spoken[match.end():], maxsplit=1)[0]
-    if re.search(r'\b(?:mas|porem)\s+(?:eu\s+)?(?:nao|nunca|dispenso)\b', tail):
-        return 'rejected'
-    if re.search(r'\b(?:compar\w*|versus|vs)\b', spoken):
-        return 'comparison'
-    if re.match(r'\s*(?:custa|vale|tem|qual|quanto|preco|valor|disponibilidade|estoque|promocao|garantia|foi\s+anunciad[oa])\b', tail):
-        return 'affirmative'
-    if re.search(r'\b(?:quero|prefiro|escolho|escolhi|escolha|mostre|procuro|preco|valor|custa|tem|qual|quanto|disponibilidade|estoque|promocao)\b', clause):
-        return 'affirmative'
-    return 'mentioned'
+    references = [(product, match) for product in snapshot.tables['products']
+                  for match in _product_matches(spoken, product['name'])]
+    found = {}
+    for product, match in references:
+        full = match.group() == normalize(product['name'])
+        if not any(other.start() <= match.start() and match.end() <= other.end() and
+                   (len(other.group()) > len(match.group()) or
+                    (not full and other.group() == normalize(row['name'])))
+                   for row, other in references):
+            found[product['product_id']] = product
+    return list(found.values())
+
+
+def product_reference(text: str, name: str) -> str:
+    """Classify the latest scoped reference; a mention alone grants no selection."""
+    spoken = normalize(text)
+    for clause in reversed(intent_clauses(text)):
+        matches = _product_matches(clause, name)
+        if not matches:
+            continue
+        match = matches[-1]
+        prefix, tail = clause[:match.start()], clause[match.end():]
+        polarity = clause_polarity(prefix)
+        if polarity == 'negative':
+            return 'rejected'
+        if polarity in {'conditional', 'incidental'}:
+            return polarity
+        # A trailing revocation can refer to the same product without repeating it.
+        suffix = spoken[spoken.rfind(match.group()) + len(match.group()):]
+        if re.search(r'\b(?:mas|porem)\s+(?:eu\s+)?(?:nao|nunca|dispenso)\b', suffix):
+            return 'rejected'
+        if re.search(r'\b(?:compar\w*|versus|vs)\b', spoken):
+            return 'comparison'
+        if re.match(r'\s*(?:custa|vale|tem|qual|quanto|preco|valor|disponibilidade|estoque|promocao|garantia|foi\s+anunciad[oa])\b', tail):
+            return 'affirmative'
+        if re.search(r'\b(?:quero|prefiro|escolho|escolhi|escolha|mostre|procuro|preco|valor|custa|tem|qual|quanto|disponibilidade|estoque|promocao)\b', prefix):
+            return 'affirmative'
+        return 'mentioned'
+    return 'unmentioned'
 
 
 def _words(value: str) -> set[str]:
@@ -105,7 +152,23 @@ def validate_policy_intent(topic: str, text: str) -> bool:
         'scope': r'\b(?:acessorios?|palhetas?|cabos|amplificadores|previsao do tempo|tempo|clima|vendem|vende)\b',
     }
     mentioned = {key for key, pattern in patterns.items() if re.search(pattern, spoken)}
-    return topic in mentioned if mentioned else False
+    if topic not in mentioned:
+        return False
+    for clause in intent_clauses(text):
+        if not re.search(patterns[topic], clause):
+            continue
+        # Negated experiences can motivate a policy question; they are not
+        # refusals of the consultation. Every other negative stays negative,
+        # including unfamiliar directives and pronouns ("não me informe").
+        request_clause = re.sub(r'\bnao\s+(?:gostei|chegou|recebi|funciona|foi entregue)\b', '', clause)
+        polarity = clause_polarity(request_clause)
+        # An informational condition ("se der R$500, o frete é grátis?") is
+        # different from deferring a command ("se eu pedir, consulte frete").
+        if polarity == 'conditional' and not re.search(r'\b(?:consulte|mostre|informe|responda)\b', clause):
+            return True
+        if polarity == 'affirmative':
+            return True
+    return False
 
 
 def validate_cheapest_intent(text: str, snapshot) -> bool:
@@ -147,19 +210,17 @@ def validate_catalog_intent(name: str, args: dict, text: str, snapshot, product_
         return False
     explicit_products = [p for p in snapshot.tables['products']
                          if re.search(r'(?<!\w)' + re.escape(normalize(p['name'])) + r'(?!\w)', normalized)]
-    if any(product_reference(text, product['name']) == 'rejected' for product in explicit_products):
-        return False
     negation = (r'(?:nao quero(?:\s+mais)?|nao (?:me )?(?:recomende|recomendar|indique|sugira)|'
                 r'nao gosto de|nao o|nao a|sem|exceto)\s+(?:(?:o|a)\s+)?')
-    if any(re.search(r'\b' + negation + re.escape(normalize(product['name'])) + r'(?!\w)', normalized)
-           for product in explicit_products):
-        return False
     query = args.get('text')
     if query is not None:
         if not isinstance(query, str) or not query.strip():
             return False
         if not _words(query).issubset(_words(text)):
-            return False
+            resolved = mentioned_products(text, snapshot)
+            if (len(resolved) != 1 or normalize(query) != normalize(resolved[0]['name']) or
+                    product_reference(text, resolved[0]['name']) == 'rejected'):
+                return False
         query_products = [p for p in snapshot.tables['products']
                           if _words(query).issubset(_words(p['name']))]
         if any(product_reference(text, product['name']) == 'rejected'
@@ -172,7 +233,8 @@ def validate_catalog_intent(name: str, args: dict, text: str, snapshot, product_
             ordinary = {'em','ate','com','tem','possui','esta','disponivel','disponiveis','estoque',
                         'por','no','na','de','do','da','e','ou','para','qual','custa','serve',
                         'sai','preco','garantia','barato','baratos','acustico','eletrico'}
-            if continuation and continuation.group(1) not in ordinary:
+            model_words = set().union(*(_words(p['name']) for p in query_products)) if query_products else set()
+            if continuation and continuation.group(1) not in ordinary | model_words:
                 return False
         terms = {normalize(query)}
         terms.update(normalize(product['name']) for product in snapshot.tables['products']

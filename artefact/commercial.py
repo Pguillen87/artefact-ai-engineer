@@ -132,7 +132,7 @@ def has_order_context(text: str) -> bool:
 
 
 def has_budget_context(text: str) -> bool:
-    return bool(re.search(r'(?i)\b(?:orçamento|orcamento|para gastar|posso gastar|limite|teto|no m[aá]ximo|menos de|abaixo de)\b|\bat[eé]\s+r\$', text))
+    return bool(re.search(r'(?i)\b(?:orçamento|orcamento|para gastar|posso gastar|dispon[ií]ve(?:l|is)\s+para\s+compra\w*|limite|teto|no m[aá]ximo|menos de|abaixo de)\b|\bat[eé]\s+r\$', text))
 
 
 def has_explicit_total_intent(text: str) -> bool:

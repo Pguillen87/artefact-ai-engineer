@@ -175,6 +175,10 @@ def render_results(results):
                     lines.append(statement+' A simulação desta resposta usa somente o preço do catálogo.')
                 else:
                     lines.append(statement+' Esclareça a base desejada. Quer que eu simule com o preço efetivo do catálogo?')
+        elif name=='commercial_clarification':
+            lines.append('Não realizei a cotação: esclareça o produto, a base do valor ou a restrição indicada antes de simular parcelas.')
+        elif name=='execution_clarification':
+            lines.append('Nesta consulta, não consegui validar os argumentos da cotação e não a executei; esclareça essa parte e informe um único valor em reais e a quantidade de parcelas desejada.')
         elif name=='clarification':
             if not isinstance(data,dict):
                 raise ValueError('invalid clarification')
