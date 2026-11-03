@@ -73,7 +73,7 @@ class P1Closure(unittest.TestCase):
         client = TelegramClient('synthetic', transport=Mock(side_effect=OSError('synthetic')))
         with self.assertRaises(TelegramError): client.get_updates(0)
 
-    def test_adversarial_tool_arguments_and_generic_recommendation(self):
+    def test_adversarial_tool_arguments_and_scope_less_recommendation(self):
         rejected = [
             ('Quero Yamaha.', 'search_products', {'text': 'Korg'}),
             ('Não recomende Korg Synth.', 'search_products', {'text': 'Korg Synth'}),
@@ -88,7 +88,10 @@ class P1Closure(unittest.TestCase):
                 self.assertNotIn('3x R$ 300,00', answer)
                 self.assertNotIn('preço cadastrado', answer.lower())
         agent = self.agent([{'output': [tool('recommend_products', {})]}])
-        self.assertIn('Korg', agent.answer('Recomende opções.', chat_id=1))
+        answer = agent.answer('Recomende opções.', chat_id=1)
+        self.assertIn('qual tipo ou categoria', answer.lower())
+        self.assertNotIn('Korg', answer)
+        self.assertEqual(agent.last_trace['executed_tools'], [])
 
     def test_two_identified_products_are_not_given_an_invented_total(self):
         second = list(ROWS['products']); second[0] = '2'; second[1] = '500'; second[2] = 'Korg Alternative'
@@ -99,7 +102,8 @@ class P1Closure(unittest.TestCase):
             {**tool('search_products', {'text': 'Korg Alternative'}), 'call_id': '2'}]}
         answer = ConversationAgent(snapshot, provider).answer(
             'Meu teto é R$ 900. Quero Korg Synth e Korg Alternative.', chat_id=1)
-        self.assertNotIn('dentro do orçamento', answer.lower())
+        self.assertIn('resultados para Korg Synth dentro do orçamento', answer)
+        self.assertIn('Korg Alternative:', answer)
         self.assertNotIn('total da compra', answer.lower())
 
     def test_invalid_provider_payload_never_calls_write(self):

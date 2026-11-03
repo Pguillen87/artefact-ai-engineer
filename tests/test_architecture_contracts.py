@@ -119,7 +119,9 @@ class ArchitectureContracts(unittest.TestCase):
         answer=ConversationAgent(self.snapshot,provider).answer('Quero teclado até R$ 1.200',chat_id=1)
         self.assertIn('Korg Synth:',answer)
         provider.request.return_value={'output':[tool('recommend_products',{})]}
-        self.assertIn('Korg Synth:',ConversationAgent(self.snapshot,provider).answer('Recomende opções',chat_id=1))
+        answer=ConversationAgent(self.snapshot,provider).answer('Recomende opções',chat_id=1)
+        self.assertIn('qual tipo ou categoria',answer.lower())
+        self.assertNotIn('Korg Synth:',answer)
         provider.request.return_value={'output':[tool('search_products',{'available_only':True})]}
         self.assertIn('Korg Synth:',ConversationAgent(self.snapshot,provider).answer('Quais produtos disponíveis?',chat_id=1))
         provider.request.return_value={'output':[tool('search_products',{'category':'Teclados e Pianos','min_price':'800','max_price':'2000'})]}

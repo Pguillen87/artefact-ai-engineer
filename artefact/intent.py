@@ -130,16 +130,21 @@ def _category_terms(value: str) -> set[str]:
 
 
 def mentioned_category_ids(text: str, snapshot) -> frozenset[int]:
-    normalized = normalize(text)
-    spoken_terms = _category_terms(text)
-    mentioned_categories = {c['category_id'] for c in snapshot.tables['categories']
-                            if _category_terms(c['name']).intersection(spoken_terms)}
-    if 'sopro' in spoken_terms:
-        spoken = _words(text)
-        qualifier = 'metais' if spoken.intersection({'metal','metais'}) else 'madeiras' if spoken.intersection({'madeira','madeiras'}) else None
-        if qualifier:
-            mentioned_categories = {c['category_id'] for c in snapshot.tables['categories']
-                                    if c['category_id'] in mentioned_categories and qualifier in _words(c['name'])}
+    mentioned_categories = set()
+    for clause in intent_clauses(text):
+        if clause_polarity(clause) != 'affirmative':
+            continue
+        spoken_terms = _category_terms(clause)
+        clause_categories = {c['category_id'] for c in snapshot.tables['categories']
+                             if _category_terms(c['name']).intersection(spoken_terms)}
+        if 'sopro' in spoken_terms:
+            spoken = _words(clause)
+            qualifier = ('metais' if spoken.intersection({'metal', 'metais'}) else
+                         'madeiras' if spoken.intersection({'madeira', 'madeiras'}) else None)
+            if qualifier:
+                clause_categories = {c['category_id'] for c in snapshot.tables['categories']
+                                     if c['category_id'] in clause_categories and qualifier in _words(c['name'])}
+        mentioned_categories.update(clause_categories)
     return frozenset(mentioned_categories)
 
 
@@ -219,7 +224,8 @@ def validate_cheapest_intent(text: str, snapshot) -> bool:
     return not re.search(r'R\$\s*[0-9]', text)
 
 
-def validate_catalog_intent(name: str, args: dict, text: str, snapshot, product_id: int | None = None) -> bool:
+def validate_catalog_intent(name: str, args: dict, text: str, snapshot, product_id: int | None = None,
+                            grounded_category_ids=()) -> bool:
     normalized = normalize(text)
     if name == 'promotion':
         pid = args.get('product_id')
@@ -275,6 +281,8 @@ def validate_catalog_intent(name: str, args: dict, text: str, snapshot, product_
                 return False
     category = args.get('category')
     mentioned_categories = mentioned_category_ids(text, snapshot)
+    if name == 'recommend_products':
+        mentioned_categories = mentioned_categories | frozenset(grounded_category_ids)
     if len(mentioned_categories) > 1 and len(explicit_products) != 1:
         return False
     if category is not None:

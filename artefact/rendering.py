@@ -99,6 +99,37 @@ def render_results(results):
         name=entry['consulta'];data=entry['resultado']
         if name in ('search_products','recommend_products','cheapest_product'):
             if not isinstance(data,list): raise ValueError('invalid products')
+            search_context = entry.get('search_context')
+            if not data and search_context is not None and name in {'search_products', 'recommend_products'}:
+                if not isinstance(search_context, dict):
+                    raise ValueError('invalid empty search context')
+                category = search_context.get('category')
+                query = search_context.get('query')
+                if category is not None and not isinstance(category, str):
+                    raise ValueError('invalid empty search category')
+                if query is not None and not isinstance(query, str):
+                    raise ValueError('invalid empty search query')
+                maximum = search_context.get('max_price_brl')
+                limit = ''
+                if maximum is not None:
+                    amount = _money(maximum)
+                    limit = (f' dentro do orçamento de {amount}'
+                             if search_context.get('price_limit_type') == 'budget'
+                             else f' com preço até {amount}')
+                available = search_context.get('available_only') is True
+                if query:
+                    subject = f'resultados para {query}'
+                elif category:
+                    if name == 'recommend_products':
+                        subject = f'alternativas disponíveis na categoria {category}'
+                    elif available:
+                        subject = f'produtos disponíveis na categoria {category}'
+                    else:
+                        subject = f'produtos da categoria {category}'
+                else:
+                    subject = 'produtos para os filtros informados'
+                lines.append(f'Não encontrei {subject}{limit} nesta consulta ao catálogo.')
+                continue
             if name == 'recommend_products' and data: lines.append('Alternativas disponíveis:')
             for item in data:
                 if not isinstance(item,dict) or type(item.get('stock_quantity')) is not int or type(item.get('available')) is not bool:
@@ -184,6 +215,8 @@ def render_results(results):
                 lines.append('Qual é o valor do orçamento exclusivo para os produtos? Não executei a busca sem um teto definido.')
             elif data.get('reason') == 'budget_includes_shipping':
                 lines.append('O orçamento inclui frete. Confirme o limite exclusivo para produtos; não subtraí um frete sem verificação e não executei a busca.')
+            elif data.get('reason') == 'recommendation_scope_missing':
+                lines.append('Qual tipo ou categoria de instrumento você quer que eu recomende? Não executei a recomendação sem esse contexto.')
             else:
                 lines.append('Não realizei a cotação: esclareça o produto, a base do valor ou a restrição indicada antes de simular parcelas.')
         elif name=='execution_clarification':

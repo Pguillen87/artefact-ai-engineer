@@ -428,7 +428,12 @@ class ConversationAgent:
                     event(op, 'conversation', 'complete', 'validation', 'failure')
                     return render_results(clarifications)
                 results.extend(clarifications)
-            if all(item.get('resultado') in (None, [], (), {}) for item in results):
+            has_empty_catalog_result = any(
+                entry.get('consulta') in {'search_products', 'recommend_products'} and
+                entry.get('resultado') == [] and entry.get('search_context') is not None
+                for entry in results)
+            results_are_empty = all(item.get('resultado') in (None, [], (), {}) for item in results)
+            if results_are_empty and not has_empty_catalog_result:
                 self.last_trace.update(status='empty', stage='complete')
                 event(op, 'conversation', 'complete', 'tool', 'empty', duration_ms=int((time.monotonic()-started)*1000))
                 return 'Não encontrei informações suficientes para essa consulta.'
@@ -444,9 +449,12 @@ class ConversationAgent:
                 event(op, 'conversation', 'complete', 'validation', 'failure', side_effect='committed' if written else 'none', duration_ms=int((time.monotonic()-started)*1000))
                 return 'A resposta é longa demais. Por favor, refine sua consulta.'
             self._remember(self.history, chat_id, (messages + [{'role': 'assistant', 'content': answer}])[-6:])
-            self.last_trace.update(status='clarification' if not self.last_trace['executed_tools'] else 'partial' if clarifications or mismatch_result is not None else 'success',
+            status = ('empty' if results_are_empty and has_empty_catalog_result else
+                      'clarification' if not self.last_trace['executed_tools'] else
+                      'partial' if clarifications or mismatch_result is not None else 'success')
+            self.last_trace.update(status=status,
                                    stage='complete', error_code=None)
-            event(op, 'conversation', 'complete', 'tool', 'success',
+            event(op, 'conversation', 'complete', 'tool', 'empty' if status == 'empty' else 'success',
                   side_effect='committed' if written else 'none', duration_ms=int((time.monotonic()-started)*1000))
             return answer
         except Exception as exc:

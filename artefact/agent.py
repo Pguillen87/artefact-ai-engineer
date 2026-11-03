@@ -10,7 +10,8 @@ import urllib.request
 
 from .services import Catalog, OrderService, get_policy
 from .commercial import quote_installments, parse_brl_mention
-from .intent import normalize, validate_catalog_intent, validate_policy_intent, validate_cheapest_intent
+from .intent import (normalize, mentioned_category_ids, validate_catalog_intent,
+                     validate_policy_intent, validate_cheapest_intent)
 from .context import explicit_product, explicit_order_id, name_in_text, resolve_commercial_basis
 from .telemetry import bind_operation, event, operation_id, reset_operation
 
@@ -82,6 +83,70 @@ def _withhold_price(product):
     return dict(item, price_withheld=True)
 
 
+def _prepare_recommendation_call(args, text, snapshot, decision):
+    """Ground alternatives in the active category or the refused product's category."""
+    args = dict(args)
+    query = args.get('text')
+    if isinstance(query, str) and query.strip():
+        words = set(re.findall(r'\w+', normalize(query)))
+        matching = [product for product in snapshot.tables['products']
+                    if words and words.issubset(set(re.findall(r'\w+', normalize(product['name']))))]
+        if matching and all(product['product_id'] in decision.scope.excluded_ids for product in matching):
+            args.pop('text')
+
+    if 'category' not in args and isinstance(args.get('text'), str):
+        category_matches = [category for category in snapshot.tables['categories']
+                            if normalize(category['name']) == normalize(args['text'])]
+        if len(category_matches) == 1:
+            args['category'] = category_matches[0]['name']
+            args.pop('text')
+
+    if not args.get('category') and not args.get('text'):
+        active_categories = mentioned_category_ids(text, snapshot)
+        category_ids = (active_categories if active_categories else decision.scope.category_ids)
+        if len(category_ids) != 1:
+            raise ValueError('recommendation_scope_missing')
+        category_id = next(iter(category_ids))
+        category = next((row for row in snapshot.tables['categories']
+                         if row['category_id'] == category_id), None)
+        if category is None:
+            raise ValueError('recommendation_scope_missing')
+        args['category'] = category['name']
+    return args
+
+
+def _contextual_recommendation_categories(name, args, text, snapshot, decision):
+    if name != 'recommend_products' or not args.get('category') or mentioned_category_ids(text, snapshot):
+        return frozenset()
+    if len(decision.scope.category_ids) != 1:
+        return frozenset()
+    category = next((row for row in snapshot.tables['categories']
+                     if normalize(row['name']) == normalize(args['category'])), None)
+    if category and category['category_id'] in decision.scope.category_ids:
+        return frozenset({category['category_id']})
+    return frozenset()
+
+
+def _empty_search_context(name, args, decision, snapshot):
+    category_name = args.get('category')
+    if category_name is None and len(decision.scope.category_ids) == 1:
+        category_id = next(iter(decision.scope.category_ids))
+        category = next((row for row in snapshot.tables['categories']
+                         if row['category_id'] == category_id), None)
+        category_name = category['name'] if category else None
+    maximum = decision.scope.max_price
+    if args.get('max_price') is not None:
+        requested_max = args['max_price']
+        maximum = min(maximum, requested_max) if maximum is not None else requested_max
+    return {
+        'category': category_name,
+        'query': args.get('text'),
+        'max_price_brl': format(maximum, '.2f') if maximum is not None else None,
+        'price_limit_type': 'budget' if decision.amount_role == 'budget_cap' else 'filter',
+        'available_only': name == 'recommend_products' or args.get('available_only') is True,
+    }
+
+
 def prepare_commercial_call(name, args, text, snapshot, decision, product_id=None):
     """Validate a proposed quote against the resolved decision, then normalize it.
 
@@ -90,6 +155,8 @@ def prepare_commercial_call(name, args, text, snapshot, decision, product_id=Non
     """
     if name in {'search_products', 'recommend_products', 'promotion', 'cheapest_product', 'installment_quote'} and decision.restriction in {'budget_unresolved', 'budget_includes_shipping'}:
         raise ValueError(decision.restriction)
+    if name == 'recommend_products':
+        return name, _prepare_recommendation_call(args, text, snapshot, decision)
     if name not in {'search_products', 'installment_quote'}:
         return name, args
     quoting = name == 'installment_quote' or 'installments' in args
@@ -245,11 +312,16 @@ class Agent:
                     if len(plan) > 1:
                         results.append(clarification)
                         continue
-                    if decision.mismatch() is not None or rejected[index] in {'budget_unresolved', 'budget_includes_shipping'}:
+                    if (decision.mismatch() is not None or rejected[index] in {
+                            'budget_unresolved', 'budget_includes_shipping', 'recommendation_scope_missing'}):
                         from .rendering import render_results
                         return render_results([clarification])
                     return CLARIFY
-                if name in {'search_products','recommend_products','promotion'} and not validate_catalog_intent(name,args,text,self.snapshot,product_id):
+                grounded_categories = _contextual_recommendation_categories(
+                    name, args, text, self.snapshot, decision)
+                if name in {'search_products','recommend_products','promotion'} and not validate_catalog_intent(
+                        name, args, text, self.snapshot, product_id,
+                        grounded_category_ids=grounded_categories):
                     event(correlation_id,'agent','ground','validation','failure',action=name)
                     return CLARIFY
                 if name == 'cheapest_product' and (args or not validate_cheapest_intent(text, self.snapshot)):
@@ -335,7 +407,10 @@ class Agent:
                     result=self.orders.lookup(args['full_name'], order_id=explicit_order_id(text),
                                               include_catalog_comparison=compare_catalog)
                 else: return FALLBACK
-                results.append({'consulta':name,'resultado':list(result) if isinstance(result, tuple) else result})
+                entry = {'consulta': name, 'resultado': list(result) if isinstance(result, tuple) else result}
+                if name in {'search_products', 'recommend_products'} and not entry['resultado']:
+                    entry['search_context'] = _empty_search_context(name, args, decision, self.snapshot)
+                results.append(entry)
             return results if structured else json.dumps(results,ensure_ascii=False,default=str)
         except (ValueError,TypeError,KeyError,InvalidOperation,TimeoutError,OSError,urllib.error.URLError) as exc:
             category = 'integration' if isinstance(exc, (TimeoutError,OSError,urllib.error.URLError)) else 'validation'
