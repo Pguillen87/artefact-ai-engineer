@@ -97,7 +97,7 @@ def render_results(results):
     status_labels={'pending':'pendente','confirmed':'confirmado','shipped':'enviado','delivered':'entregue','cancelled':'cancelado'}
     for entry in results:
         name=entry['consulta'];data=entry['resultado']
-        if name in ('search_products','recommend_products'):
+        if name in ('search_products','recommend_products','cheapest_product'):
             if not isinstance(data,list): raise ValueError('invalid products')
             if name == 'recommend_products' and data: lines.append('Alternativas disponíveis:')
             for item in data:
@@ -131,6 +131,23 @@ def render_results(results):
                 lines.append(f"Pedido {order['order_id']}: o status cadastrado é {status}; total registrado {_money(order['total_brl'])}.")
                 if order.get('items'):
                     lines.append('Itens: '+', '.join(f"{item['quantity']} × {item['name']}" for item in order['items'])+'.')
+                comparison=order.get('catalog_comparison')
+                if comparison is not None:
+                    if not isinstance(comparison,dict) or comparison.get('basis')!='catalog_list_price':
+                        raise ValueError('invalid catalog comparison')
+                    catalog_total=comparison.get('catalog_total_brl')
+                    difference=comparison.get('difference_brl')
+                    if catalog_total is None or difference is None:
+                        lines.append('Não foi possível comparar todos os itens com os preços-base atuais do catálogo.')
+                    else:
+                        delta=Decimal(str(difference))
+                        if not delta.is_finite() or delta!=delta.quantize(Decimal('0.01')):
+                            raise ValueError('invalid catalog delta')
+                        direction='a mais que' if delta>0 else 'a menos que' if delta<0 else 'igual a'
+                        lines.append(f"Soma separada pelos preços-base cadastrados hoje: {_money(catalog_total)}; "
+                                     f"diferença de {_money(abs(delta))} {direction} o total histórico.")
+                        lines.append('Essa comparação não altera o total histórico. O pedido não registra a causa; '
+                                     'desconto ou preço anterior diferente são hipóteses, não fatos confirmados.')
                 if order.get('payment_method'):
                     lines.append(f"Método de pagamento registrado: {order['payment_method']}; confirmação do pagamento não informada.")
                 if order.get('estimated_delivery'):
@@ -143,6 +160,30 @@ def render_results(results):
                     lines.append('Data efetiva de entrega não informada; o status cadastrado não comprova o recebimento físico.')
         elif name=='policy':
             if data is not None: lines.append(data['summary'])
+        elif name=='price_mismatch':
+            if not isinstance(data,dict) or not isinstance(data.get('product_name'),str):
+                raise ValueError('invalid price mismatch')
+            reported=data.get('reported_amount_brl')
+            catalog=data.get('catalog_amount_brl')
+            if reported is None or catalog is None:
+                lines.append(f"O valor informado para {data['product_name']} diverge do preço disponível no snapshot; "
+                             'não consigo confirmar um preço efetivo válido para simulação. Consulte a loja.')
+            else:
+                statement=(f"O valor informado {_money(reported)} diverge do preço efetivo do catálogo de {_money(catalog)}.")
+                if data.get('catalog_quote_authorized') is True:
+                    lines.append(statement+' A simulação desta resposta usa somente o preço do catálogo.')
+                else:
+                    lines.append(statement+' Quer que eu simule com o preço efetivo do catálogo?')
+        elif name=='clarification':
+            if not isinstance(data,dict):
+                raise ValueError('invalid clarification')
+            operation=data.get('tool')
+            if operation=='search_products':
+                lines.append('Não realizei a busca de produtos porque o filtro não correspondeu ao pedido; esclareça essa parte.')
+            elif operation=='policy':
+                lines.append('Não consegui validar a consulta da política; esclareça essa parte para que eu a consulte.')
+            else:
+                lines.append('Não consegui validar uma das operações e não a executei; esclareça essa parte.')
         elif name=='installment_quote':
             if not isinstance(data,dict): raise ValueError('invalid installment quote')
             lines.append(_render_installment_quote(data))

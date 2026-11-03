@@ -96,6 +96,23 @@ class Catalog:
                 return tuple(found[:limit])
         return tuple(found[:limit])
 
+    def cheapest_available(self):
+        """Return the global lowest effective snapshot price for a saleable item."""
+        candidates = []
+        for product in self._snapshot.tables['products']:
+            item = self.product(product['product_id'])
+            if not item or not item['available']:
+                continue
+            quote = item['price_quote']
+            effective = quote.get('checkout_price_brl')
+            if effective is None or quote.get('status') not in {'none_available', 'active_in_snapshot'}:
+                continue
+            candidates.append(item)
+        if not candidates:
+            return None
+        return min(candidates, key=lambda item: (item['price_quote']['checkout_price_brl'],
+                                                 item['product_id']))
+
     def promotion(self, product_id):
         product = self.product(product_id)
         if product is None:
@@ -113,24 +130,50 @@ class OrderService:
     def __init__(self, snapshot):
         self._snapshot = snapshot
 
-    def lookup(self, full_name):
+    def lookup(self, full_name, *, order_id=None, include_catalog_comparison=False):
         name = _name(full_name)
-        if len(name.split()) < 2:
+        if (len(name.split()) < 2 or
+                (order_id is not None and (type(order_id) is not int or order_id <= 0)) or
+                not isinstance(include_catalog_comparison, bool)):
             return ()
         matches = [c for c in self._snapshot.tables['customers'] if _name(c['name']) == name]
         if len(matches) != 1:
             return ()
         customer_id = matches[0]['customer_id']
         results = []
+        products = {p['product_id']: p for p in self._snapshot.tables['products']}
         for order in self._snapshot.tables['orders']:
-            if order['customer_id'] != customer_id:
+            if order['customer_id'] != customer_id or (order_id is not None and order['order_id'] != order_id):
                 continue
-            names = {p['product_id']:p['name'] for p in self._snapshot.tables['products']}
-            items = tuple({'product_id':i['product_id'],'name':names[i['product_id']],'quantity':i['quantity']} for i in self._snapshot.tables['order_items'] if i['order_id'] == order['order_id'])
-            results.append({'order_id':order['order_id'],'status':order['status'],'total_brl':order['total_brl'],
-                            'payment_method':order['payment_method'],'tracking_code':order['tracking_code'] or None,
-                            'estimated_delivery':order['estimated_delivery'] or None,'delivered_at':None,
-                            'payment_confirmed':None,'items':items})
+            order_items = [i for i in self._snapshot.tables['order_items'] if i['order_id'] == order['order_id']]
+            items = tuple({'product_id': i['product_id'], 'name': products[i['product_id']]['name'],
+                           'quantity': i['quantity']} for i in order_items)
+            result = {'order_id': order['order_id'], 'status': order['status'], 'total_brl': order['total_brl'],
+                      'payment_method': order['payment_method'], 'tracking_code': order['tracking_code'] or None,
+                      'estimated_delivery': order['estimated_delivery'] or None, 'delivered_at': None,
+                      'payment_confirmed': None, 'items': items}
+            if include_catalog_comparison:
+                comparison_items = []
+                catalog_total = Decimal('0')
+                complete = True
+                for item in order_items:
+                    product = products[item['product_id']]
+                    price = product.get('price_brl')
+                    if not isinstance(price, Decimal) or not price.is_finite():
+                        complete = False
+                    else:
+                        catalog_total += price * item['quantity']
+                    comparison_items.append({'product_id': item['product_id'],
+                                             'quantity': item['quantity'],
+                                             'catalog_list_price_brl': price})
+                catalog_total = catalog_total if complete else None
+                result['catalog_comparison'] = {
+                    'basis': 'catalog_list_price',
+                    'items': tuple(comparison_items),
+                    'catalog_total_brl': catalog_total,
+                    'difference_brl': catalog_total - order['total_brl'] if catalog_total is not None else None,
+                }
+            results.append(result)
         return tuple(results)
 
 

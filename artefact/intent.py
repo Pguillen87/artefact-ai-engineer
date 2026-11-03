@@ -41,6 +41,8 @@ def product_reference(text: str, name: str) -> str:
         return 'rejected'
     if re.search(r'\b(?:compar\w*|versus|vs)\b', spoken):
         return 'comparison'
+    if re.match(r'\s*(?:custa|vale|tem|qual|quanto|preco|valor|disponibilidade|estoque|promocao|garantia|foi\s+anunciad[oa])\b', tail):
+        return 'affirmative'
     if re.search(r'\b(?:quero|prefiro|escolho|escolhi|escolha|mostre|procuro|preco|valor|custa|tem|qual|quanto|disponibilidade|estoque|promocao)\b', clause):
         return 'affirmative'
     return 'mentioned'
@@ -104,6 +106,25 @@ def validate_policy_intent(topic: str, text: str) -> bool:
     }
     mentioned = {key for key, pattern in patterns.items() if re.search(pattern, spoken)}
     return topic in mentioned if mentioned else False
+
+
+def validate_cheapest_intent(text: str, snapshot) -> bool:
+    """Only authorize the unfiltered global cheapest-item operation for a clear query."""
+    normalized = normalize(text)
+    if not re.search(r'\b(?:mais\s+barato|menor\s+(?:preco|valor)|mais\s+em\s+conta)\b', normalized):
+        return False
+    if not re.search(r'\b(?:estoque|disponivel|disponiveis)\b', normalized):
+        return False
+    if re.search(r'\bnao\s+(?:quero|mostre|indique|recomende)\s+(?:o\s+)?(?:instrumento\s+)?mais\s+barato\b', normalized):
+        return False
+    if any(re.search(r'(?<!\w)' + re.escape(normalize(product['name'])) + r'(?!\w)', normalized)
+           for product in snapshot.tables['products']):
+        return False
+    spoken_terms = _category_terms(text)
+    if any(_category_terms(category['name']).intersection(spoken_terms)
+           for category in snapshot.tables['categories']):
+        return False
+    return not re.search(r'R\$\s*[0-9]', text)
 
 
 def validate_catalog_intent(name: str, args: dict, text: str, snapshot, product_id: int | None = None) -> bool:
@@ -201,20 +222,14 @@ def validate_catalog_intent(name: str, args: dict, text: str, snapshot, product_
                 return False
             required[key] = value
     for key, value in required.items():
-        try:
-            if key not in args or Decimal(args[key]) != value:
-                return False
-        except (InvalidOperation, TypeError, ValueError):
+        if key not in args or not isinstance(args[key], str) or parse_brl_mention(args[key]) != value:
             return False
     for key in ('min_price', 'max_price'):
         if key in args:
             if key not in required and not (key == 'max_price' and re.search(r'\borcamento\b', normalized)):
                 return False
-            try:
-                price = Decimal(args[key])
-            except (InvalidOperation, TypeError, ValueError):
-                return False
-            if not price.is_finite() or price not in values:
+            price = parse_brl_mention(args[key]) if isinstance(args[key], str) else None
+            if price is None or price not in values:
                 return False
             if key == 'min_price' and re.search(r'\b(?:ate|abaixo|maximo)\b', normalized) and not re.search(r'\b(?:entre|partir|minimo|acima)\b', normalized):
                 return False

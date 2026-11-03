@@ -61,6 +61,10 @@ class QATerminalBatchTests(unittest.TestCase):
                 'selected_tools': ['search_products'],
                 'executed_tools': ['search_products'],
                 'tool_details': [{'name': 'search_products'}],
+                'tool_executions': [{'name': 'search_products', 'status': 'executed',
+                                     'max_price_brl': '1500.00', 'result_count': 1}],
+                'rejected_tools': [],
+                'plan_overrides': [],
                 'error_code': None,
             }
             return f'reply for {chat_id}: {message}'
@@ -83,6 +87,8 @@ class QATerminalBatchTests(unittest.TestCase):
         self.assertEqual([call.kwargs['chat_id'] for call in agent.answer.call_args_list], ['qa-a', 'qa-b', 'qa-a'])
         self.assertEqual(rows[0]['tools_executed'], ['search_products'])
         self.assertEqual(rows[0]['tool_details'], [{'name': 'search_products'}])
+        self.assertEqual(rows[0]['tool_executions'][0]['max_price_brl'], '1500.00')
+        self.assertEqual(rows[0]['tool_executions'][0]['result_count'], 1)
         self.assertIn('latency_ms', rows[0])
         self.assertNotIn('message', rows[0])
 

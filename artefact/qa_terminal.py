@@ -152,6 +152,12 @@ class TerminalSessionRunner:
             'tools_executed': tools_executed,
             'tool_details': [dict(item) for item in trace.get('tool_details', [])[:3]
                              if isinstance(item, dict) and isinstance(item.get('name'), str)],
+            'tool_executions': [dict(item) for item in trace.get('tool_executions', [])[:3]
+                                if isinstance(item, dict) and isinstance(item.get('name'), str)],
+            'rejected_tools': [dict(item) for item in trace.get('rejected_tools', [])[:3]
+                              if isinstance(item, dict) and isinstance(item.get('name'), str)],
+            'plan_overrides': [dict(item) for item in trace.get('plan_overrides', [])[:3]
+                               if isinstance(item, dict) and isinstance(item.get('tool'), str)],
             'latency_ms': round((time.monotonic() - started) * 1000),
         }
         if status == 'error':

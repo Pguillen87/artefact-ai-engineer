@@ -18,6 +18,7 @@ class ConversationContext:
     turn: int = 0
     origin: str = 'user'
     customer_id: int | None = None
+    policy_topic: str | None = None
 
 
 _FOLLOWUP = re.compile(
@@ -85,6 +86,18 @@ def product_installment_followup(text: str) -> bool:
     return bool(re.fullmatch(r'(?i)\s*(?:e\s+)?(?:(?:quanto\s+(?:fica|ficaria|seria)\s+)?(?:esse|este|aquele)\s+produto\s+)?(?:em|a)\s+\d{1,2}\s*(?:x|vezes|parcelas?)\s*[?.!]*\s*', text))
 
 
+def pix_policy_followup(text: str) -> bool:
+    spoken = normalize(text)
+    return bool(re.search(r'\b(?:posso|pode|podemos)\s+usar\s+(?:os\s+dois|ambos\s+os)\s+descontos?\s*[?.!]*\s*$', spoken))
+
+
+def explicit_order_id(text: str) -> int | None:
+    spoken = normalize(text)
+    matches = re.findall(r'\bpedido(?:\s+(?:numero|n[ºo.]?))?\s+(\d+)\b', spoken)
+    unique = set(matches)
+    return int(next(iter(unique))) if len(unique) == 1 else None
+
+
 def explicit_product(text: str, snapshot):
     """Resolve only a unique, complete catalog name explicitly present in the turn."""
     if snapshot is None:
@@ -109,6 +122,8 @@ def product_amount_requires_clarification(text: str, snapshot) -> bool:
 def next_context(text: str, previous: ConversationContext | None, turn: int) -> ConversationContext:
     if previous and order_followup(text):
         return ConversationContext(turn=turn, customer_id=previous.customer_id)
+    if previous and previous.policy_topic == 'pix' and pix_policy_followup(text):
+        return ConversationContext(turn=turn, policy_topic='pix')
     if previous and ((product_followup(text) and previous.product_id is not None) or
                      (_FOLLOWUP.fullmatch(text) and (previous.amount is not None or previous.product_id is not None))):
         return ConversationContext(previous.amount, previous.amount_role, previous.product_id,
