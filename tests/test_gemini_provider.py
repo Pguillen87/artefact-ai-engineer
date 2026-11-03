@@ -156,6 +156,22 @@ class GeminiProviderTests(unittest.TestCase):
             self.assertIn('nome específico', properties['text'].get('description', '').casefold())
             self.assertIn('não subtraia o frete', properties['max_price'].get('description', '').casefold())
 
+    def test_provider_limits_category_argument_to_snapshot_labels(self):
+        response = SimpleNamespace(candidates=[], usage_metadata=None)
+        models = FakeModels(response)
+        provider = self.provider_type()(
+            api_key='test-key', model='gemini-test', client=SimpleNamespace(models=models),
+            catalog_categories=['Teclados e Pianos'],
+        )
+
+        provider.request([{'role': 'user', 'content': 'Quero opções de teclados.'}])
+
+        declarations = models.calls[0]['config']['tools'][0]['function_declarations']
+        search = next(tool for tool in declarations if tool['name'] == 'search_products')
+        recommend = next(tool for tool in declarations if tool['name'] == 'recommend_products')
+        self.assertEqual(search['parameters_json_schema']['properties']['category']['enum'], ['Teclados e Pianos'])
+        self.assertEqual(recommend['parameters_json_schema']['properties']['category']['enum'], ['Teclados e Pianos'])
+
     @staticmethod
     def _tool_declarations():
         from artefact.agent import TOOLS

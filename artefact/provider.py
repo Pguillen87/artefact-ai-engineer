@@ -50,12 +50,19 @@ class GeminiProvider:
     TIMEOUT_MS = 25_000
 
     def __init__(self, api_key, model, *, client=None, before_request=None,
-                 max_request_bytes=MAX_REQUEST_BYTES):
+                 max_request_bytes=MAX_REQUEST_BYTES, catalog_categories=None):
         if not api_key or not model:
             raise ValueError('API key and model required')
         if type(max_request_bytes) is not int or max_request_bytes < 1:
             raise ValueError('positive request byte limit required')
+        if catalog_categories is None:
+            catalog_categories = ()
+        if (not isinstance(catalog_categories, (list, tuple)) or len(catalog_categories) > 100 or
+                any(not isinstance(item, str) or not item.strip() or len(item) > 120
+                    for item in catalog_categories)):
+            raise ValueError('invalid catalog category labels')
         self.model = model
+        self.catalog_categories = tuple(dict.fromkeys(catalog_categories))
         self.before_request = before_request
         self.max_request_bytes = max_request_bytes
         self.last_usage = {}
@@ -136,11 +143,18 @@ class GeminiProvider:
 
     def request(self, messages, final=False):
         contents = self._contents(messages)
-        declarations = [{
-            'name': tool['name'],
-            'description': tool['description'],
-            'parameters_json_schema': copy.deepcopy(tool['parameters']),
-        } for tool in TOOLS if tool.get('type') == 'function']
+        declarations = []
+        for tool in TOOLS:
+            if tool.get('type') != 'function':
+                continue
+            parameters = copy.deepcopy(tool['parameters'])
+            if self.catalog_categories and tool['name'] in {'search_products', 'recommend_products'}:
+                parameters['properties']['category']['enum'] = list(self.catalog_categories)
+            declarations.append({
+                'name': tool['name'],
+                'description': tool['description'],
+                'parameters_json_schema': parameters,
+            })
         config = {
             'system_instruction': (
                 'Atenda em português brasileiro. Escolha somente ferramentas declaradas '
