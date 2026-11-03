@@ -47,9 +47,14 @@ class AuditBlockers(unittest.TestCase):
 
     def test_c1_explicit_total_and_simulation_remain_valid(self):
         provider = Mock(); provider.request.return_value = {'output': [call('installment_quote', {'amount_brl': '900', 'installments': 3})]}
-        for text in ('Minha compra ficou em R$ 900. Quanto fica em 3x?', 'Simule um total de R$ 900 em três parcelas.', 'Simule um total de R$ 900 em 3x para Korg Synth.'):
+        for text in ('Minha compra ficou em R$ 900. Quanto fica em 3x?', 'Simule um total de R$ 900 em três parcelas.'):
             with self.subTest(text=text):
                 self.assertIn('3x R$ 300,00', ConversationAgent(self.snapshot, provider).answer(text))
+        # A product linked to a divergent amount now requires clarification unless
+        # the customer explicitly says the simulation is hypothetical.
+        answer = ConversationAgent(self.snapshot, provider).answer('Simule um total de R$ 900 em 3x para Korg Synth.')
+        self.assertIn('diverge', answer.lower())
+        self.assertNotIn('3x R$ 300,00', answer)
 
     def test_c3_no_context_from_negated_product(self):
         provider = Mock(); provider.request.side_effect = [

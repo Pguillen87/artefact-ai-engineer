@@ -6,10 +6,10 @@ import re
 import time
 
 from .agent import Agent, CLARIFY, FALLBACK, TOOLS, WRITE_ISOLATION, WRITE_UNCERTAIN
-from .context import explicit_customer, explicit_product, installment_followup, next_context, order_followup, product_followup, product_installment_followup, product_amount_requires_clarification
+from .context import explicit_customer, explicit_product, installment_followup, next_context, order_followup, product_followup, product_installment_followup, product_amount_requires_clarification, resolve_commercial_basis, confirms_catalog_price
 from .rendering import render_results
-from .intent import normalize, product_reference, validate_catalog_intent
-from .commercial import extract_installment_count, has_budget_context, money_mentions, parse_brl_mention
+from .intent import normalize, product_reference, validate_catalog_intent, validate_policy_intent
+from .commercial import extract_installment_count, money_mentions, parse_brl_mention, parse_installment_request
 from .context import explicit_order_id, pix_policy_followup
 from .services import Catalog
 from .telemetry import event, operation_id
@@ -28,29 +28,24 @@ class _SinglePlan:
 
 
 def _catalog_price_mismatch(text, explicit, snapshot):
-    if (explicit is None or has_budget_context(text) or
-            not re.search(r'\b(?:custa|preco|anunciad[oa]s?|vale)\b', normalize(text))):
+    basis = resolve_commercial_basis(text, snapshot)
+    if basis.kind not in {'ambiguous', 'catalog'} or basis.product is None or basis.amount is None:
         return None
-    amounts = money_mentions(text)
-    if len(amounts) != 1 or amounts[0] is None:
+    comparison_amount = basis.total_amount if basis.amount_role == 'per_installment' else basis.amount
+    if comparison_amount is None:
         return None
-    product = Catalog(snapshot).product(explicit['product_id'])
-    if product is None:
-        return None
-    effective = product['price_quote'].get('checkout_price_brl')
-    if effective is not None and effective == amounts[0]:
+    if basis.catalog_amount is not None and basis.catalog_amount == comparison_amount:
         return None
     return {
-        'product_name': product['name'],
-        'reported_amount_brl': amounts[0],
-        'catalog_amount_brl': effective,
+        'product_name': basis.product['name'],
+        'reported_amount_brl': comparison_amount,
+        'reported_per_installment': basis.amount_role == 'per_installment',
+        'catalog_amount_brl': basis.catalog_amount,
     }
 
 
 def _confirms_catalog_price(text):
-    normalized = normalize(text)
-    return bool('catalogo' in normalized.split() and
-                re.search(r'\b(?:confirm\w*|corret\w*|cert\w*|oficial)\b', normalized))
+    return confirms_catalog_price(text)
 
 
 def _safe_tool_detail(name, args, *, status, result_count=None, reason=None, origin=None):
@@ -78,6 +73,11 @@ def _safe_tool_detail(name, args, *, status, result_count=None, reason=None, ori
             'shipping', 'installments', 'payment_mix', 'pix', 'exchange', 'warranty',
             'regret', 'hours', 'contacts', 'scope'}:
         detail['topic'] = args['topic']
+    elif safe_name == 'installment_quote':
+        amount = parse_brl_mention(args['amount_brl']) if isinstance(args.get('amount_brl'), str) else None
+        detail['amount_brl'] = format(amount, '.2f') if amount is not None else None
+        if type(args.get('installments')) is int:
+            detail['installments'] = args['installments']
     elif safe_name == 'cheapest_product':
         detail['global_catalog_scan'] = True
     elif safe_name == 'orders':
@@ -197,13 +197,29 @@ class ConversationAgent:
             if customer_id is not None:
                 current = replace(current, customer_id=customer_id)
                 self._remember(self.context, chat_id, current)
+            basis = resolve_commercial_basis(text, snapshot)
+            self.last_trace['commercial_basis'] = {'kind': basis.kind,
+                'amount_brl': format(basis.amount, '.2f') if basis.amount is not None else None,
+                'catalog_amount_brl': format(basis.catalog_amount, '.2f') if basis.catalog_amount is not None else None,
+                'amount_role': basis.amount_role,
+                'total_amount_brl': format(basis.total_amount, '.2f') if basis.total_amount is not None else None}
+            if prior and prior.amount_role == 'hypothetical' and installment_followup(text, prior):
+                self.last_trace['commercial_basis'] = {'kind': 'hypothetical',
+                    'amount_brl': format(prior.amount, '.2f'), 'catalog_amount_brl': None, 'source': 'session'}
+            if basis.kind in {'ambiguous', 'hypothetical'}:
+                amount = (basis.total_amount if basis.kind == 'hypothetical' and basis.amount_role == 'per_installment'
+                          else basis.amount)
+                current = replace(current, amount=amount, amount_role=basis.kind)
+                self._remember(self.context, chat_id, current)
             if explicit is not None:
                 role = current.amount_role
                 price = Catalog(snapshot).product(explicit['product_id'])
                 effective = price['price_quote'].get('checkout_price_brl') if price else None
-                if (current.amount is not None and current.amount_role != 'budget_cap' and
+                if (current.amount is not None and current.amount_role not in {'budget_cap', 'hypothetical'} and
                         (effective is None or effective != current.amount)):
-                    role = 'ambiguous'
+                    role = 'catalog' if basis.kind == 'catalog' else 'ambiguous'
+                if role == 'catalog':
+                    current = replace(current, amount=None)
                 current = replace(current, amount_role=role, product_id=explicit['product_id'],
                                   product_name=explicit['name'], origin='user')
                 self._remember(self.context, chat_id, current)
@@ -246,12 +262,12 @@ class ConversationAgent:
                 count = extract_installment_count(text)
                 quote_authorized = count is not None and _confirms_catalog_price(text)
                 mismatch_result = dict(price_mismatch, catalog_quote_authorized=quote_authorized)
-                args = {'text': explicit['name']}
+                args = {'text': basis.product['name']}
                 if quote_authorized:
                     args['installments'] = count
                 forced_plan = _SinglePlan('search_products', args)
                 forced_reason = 'catalog_price_authority'
-            elif prior and prior.product_id is not None and product_installment_followup(text):
+            elif prior and prior.product_id is not None and prior.amount_role not in {'ambiguous', 'hypothetical'} and product_installment_followup(text):
                 count = extract_installment_count(text)
                 if count is not None:
                     product = Catalog(snapshot).product(prior.product_id)
@@ -263,7 +279,7 @@ class ConversationAgent:
                 forced_plan = _SinglePlan('policy', {'topic': 'pix'})
                 forced_reason = 'valid_session_policy_reference'
 
-            if not calls and forced_plan is None:
+            if not calls and forced_plan is None and mismatch_result is None:
                 answer = 'Posso ajudar com produtos, pedidos e políticas da loja. O que você gostaria de saber?'
                 self.last_trace.update(status='no_tool', stage='complete')
                 self._remember(self.history, chat_id, (messages + [{'role': 'assistant', 'content': answer}])[-6:])
@@ -287,11 +303,74 @@ class ConversationAgent:
                 seen.add(signature)
                 plans.append(_SinglePlan(name, args))
             if forced_plan is not None:
-                plans = [forced_plan]
+                def related(plan):
+                    if forced_reason == 'valid_session_policy_reference':
+                        return plan.name == 'policy' and plan.args.get('topic') == 'pix'
+                    if plan.name == 'installment_quote':
+                        return True
+                    if plan.name != 'search_products':
+                        return False
+                    query = plan.args.get('text')
+                    target = normalize(forced_plan.args.get('text', ''))
+                    if isinstance(query, str) and query.strip():
+                        words = set(re.findall(r'\w+', normalize(query)))
+                        if words and not words.issubset(set(re.findall(r'\w+', target))):
+                            return not validate_catalog_intent(plan.name, plan.args, text, snapshot)
+                    elif plan.args.get('category') and 'installments' not in plan.args:
+                        return not validate_catalog_intent(plan.name, plan.args, text, snapshot)
+                    return True
+                replaced = [plan for plan in plans if related(plan)]
+                independent = [plan for plan in plans if not related(plan)]
+                invalid_related = []
+                if mismatch_result is not None and mismatch_result['catalog_quote_authorized']:
+                    for plan in replaced:
+                        valid = (plan.name == 'search_products'
+                                 and set(plan.args) <= {'text', 'category', 'min_price', 'max_price', 'available_only', 'installments'}
+                                 and validate_catalog_intent(plan.name, plan.args, text, snapshot)
+                                 and ('installments' not in plan.args or
+                                      (type(plan.args['installments']) is int and
+                                       plan.args['installments'] == extract_installment_count(text))))
+                        if not valid:
+                            invalid_related.append(plan)
+                    if invalid_related:
+                        mismatch_result['catalog_quote_authorized'] = False
+                if mismatch_result is not None and not mismatch_result['catalog_quote_authorized']:
+                    for plan in replaced:
+                        detail = _safe_tool_detail(plan.name, plan.args, status='rejected', reason='conflicting_price_basis')
+                        self.last_trace['tool_executions'].append(detail)
+                        self.last_trace['rejected_tools'].append({'name': plan.name, 'reason': 'conflicting_price_basis'})
+                if mismatch_result is not None and not mismatch_result['catalog_quote_authorized']:
+                    plans = independent
+                else:
+                    plans = [forced_plan] + independent
                 self.last_trace['plan_overrides'].append({
                     'reason': forced_reason,
                     'tool': forced_plan.name,
                 })
+            if mismatch_result is not None and any(plan.name == 'request_technical_review' for plan in plans):
+                self.last_trace.update(status='error', error_code='tool_isolation')
+                return WRITE_ISOLATION
+            if basis.kind == 'hypothetical':
+                request = parse_installment_request(text)
+                for index, plan in enumerate(plans):
+                    if (plan.name == 'search_products' and request is not None and basis.product is not None
+                            and set(plan.args) <= {'text', 'installments'}
+                            and plan.args.get('installments') == request.count
+                            and validate_catalog_intent(plan.name, plan.args, text, snapshot)):
+                        plans[index] = _SinglePlan('installment_quote', {
+                            'amount_brl': format(request.stated_amount, '.2f'), 'installments': request.count})
+                        self.last_trace['plan_overrides'].append({'reason': 'hypothetical_basis', 'tool': 'installment_quote'})
+            followup_request = installment_followup(text, prior)
+            if prior and prior.amount_role == 'hypothetical' and prior.product_id is not None and followup_request:
+                for index, plan in enumerate(plans):
+                    if (plan.name == 'search_products' and set(plan.args) <= {'text', 'installments'}
+                            and plan.args.get('installments') == followup_request.count
+                            and validate_catalog_intent(plan.name, plan.args, text + ' ' + prior.product_name,
+                                                        snapshot, prior.product_id)):
+                        plans[index] = _SinglePlan('installment_quote', {
+                            'amount_brl': format(followup_request.stated_amount, '.2f'),
+                            'installments': followup_request.count})
+                        self.last_trace['plan_overrides'].append({'reason': 'hypothetical_session_basis', 'tool': 'installment_quote'})
             event(op, 'conversation', 'plan', 'validation', 'success')
 
             results = ([{'consulta': 'price_mismatch', 'resultado': mismatch_result}]
@@ -300,6 +379,9 @@ class ConversationAgent:
             explicitly_mentioned = [p for p in snapshot.tables['products'] if normalize(p['name']) in normalize(text)]
             forbid_parse = current.amount_role == 'ambiguous' or product_amount_requires_clarification(text, snapshot)
             clarifications = []
+            if (mismatch_result is not None and validate_policy_intent('shipping', text)
+                    and not any(plan.name == 'policy' and plan.args.get('topic') == 'shipping' for plan in plans)):
+                clarifications.append({'consulta': 'clarification', 'resultado': {'tool': 'policy'}})
             for plan in plans:
                 stage = 'tool'
                 detail = _safe_tool_detail(plan.name, plan.args, status='pending',
@@ -308,7 +390,7 @@ class ConversationAgent:
                     detail.update(status='rejected', reason='invalid_tool_plan')
                     self.last_trace['tool_executions'].append(detail)
                     self.last_trace['rejected_tools'].append({'name': 'unknown', 'reason': 'invalid_tool_plan'})
-                    if len(plans) > 1:
+                    if len(plans) > 1 or results:
                         clarifications.append({'consulta': 'clarification', 'resultado': {'tool': 'unknown'}})
                         continue
                     self.last_trace.update(status='error', error_code='invalid_tool_plan')
@@ -331,7 +413,7 @@ class ConversationAgent:
                     detail.update(status='rejected', reason='invalid_price_filter')
                     self.last_trace['tool_executions'].append(detail)
                     self.last_trace['rejected_tools'].append({'name': plan.name, 'reason': 'invalid_price_filter'})
-                    if len(plans) > 1:
+                    if len(plans) > 1 or results:
                         clarifications.append({'consulta': 'clarification', 'resultado': {'tool': plan.name}})
                         continue
                     self.last_trace.update(status='clarification', error_code=None)
@@ -340,7 +422,9 @@ class ConversationAgent:
                     return CLARIFY
                 request = installment_followup(text, prior) if plan.name == 'installment_quote' else None
                 evidence = Agent(snapshot, plan, self.review_submit).answer(
-                    validation_text, installment_request=request, forbid_installment_parse=forbid_parse,
+                    validation_text, installment_request=request,
+                    installment_basis='hipotetico' if request and prior and prior.amount_role == 'hypothetical' else None,
+                    forbid_installment_parse=forbid_parse,
                     forbid_product_installments=comparison or len(explicitly_mentioned) > 1, product_id=product_id,
                     customer_id=customer_id if customer_id is not None else prior.customer_id if prior and order_followup(text) else None,
                     structured=True, correlation_id=op, count_text=text)
@@ -355,7 +439,7 @@ class ConversationAgent:
                         detail.update(status='rejected', reason=reason)
                         self.last_trace['tool_executions'].append(detail)
                         self.last_trace['rejected_tools'].append({'name': plan.name, 'reason': reason})
-                        if len(plans) > 1:
+                        if len(plans) > 1 or results:
                             clarifications.append({'consulta': 'clarification', 'resultado': {'tool': plan.name}})
                             continue
                         self.last_trace.update(status='clarification', error_code=None)
@@ -410,7 +494,7 @@ class ConversationAgent:
                 current = replace(current, product_id=None, product_name=None)
                 self._remember(self.context, chat_id, current)
             if clarifications:
-                if not self.last_trace['executed_tools']:
+                if not self.last_trace['executed_tools'] and not results:
                     self.last_trace.update(status='clarification', error_code=None)
                     event(op, 'conversation', 'complete', 'validation', 'failure')
                     return CLARIFY
@@ -425,7 +509,7 @@ class ConversationAgent:
                 event(op, 'conversation', 'complete', 'validation', 'failure', side_effect='committed' if written else 'none', duration_ms=int((time.monotonic()-started)*1000))
                 return 'A resposta é longa demais. Por favor, refine sua consulta.'
             self._remember(self.history, chat_id, (messages + [{'role': 'assistant', 'content': answer}])[-6:])
-            self.last_trace.update(status='partial' if clarifications else 'success',
+            self.last_trace.update(status='partial' if clarifications or (mismatch_result is not None and self.last_trace['executed_tools']) else 'clarification' if mismatch_result is not None and not mismatch_result['catalog_quote_authorized'] else 'success',
                                    stage='complete', error_code=None)
             event(op, 'conversation', 'complete', 'tool', 'success',
                   side_effect='committed' if written else 'none', duration_ms=int((time.monotonic()-started)*1000))

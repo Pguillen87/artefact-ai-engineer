@@ -141,7 +141,7 @@ def has_explicit_total_intent(text: str) -> bool:
         return False
     if re.search(r'(?i)\bn[aã]o\s+(?:quero\s+(?:mais\s+)?)?simul\w*\b', text):
         return False
-    return bool(re.search(r'(?i)\b(?:simul\w*|parcelar|parcele|pagar|pague)\s+(?:(?:um|o)\s+)?(?:total\s+de\s+|valor\s+de\s+)?r\$|\bcompra\s+(?:ficou|custou|custa|[eé])\s+(?:em\s+)?r\$|\btotal\s+(?:da\s+compra\s+)?(?:[eé]|de|ficou)\s+(?:em\s+)?r\$', text))
+    return bool(re.search(r'(?i)\b(?:simul\w*|parcelar|parcele|pagar|pague)\s+(?:(?:um|o)\s+)?(?:total\s+de\s+|valor\s+de\s+)?r\$|\bcompra\s+(?:ficou|custou|custa|[eé])\s+(?:em\s+)?r\$|\btotal\s+(?:da\s+compra\s+)?(?:[eé]|de|ficou)\s+(?:em\s+)?r\$|\bsimula[cç][aã]o\s+(?:puramente\s+)?hipot[eé]tica\s+(?:de|com)\s+r\$|\bsimul\w*\s+hipoteticamente\s+r\$', text))
 
 
 def extract_installment_count(text: str) -> int | None:

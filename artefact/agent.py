@@ -11,7 +11,7 @@ import urllib.request
 from .services import Catalog, OrderService, get_policy
 from .commercial import quote_installments, extract_installment_count, parse_installment_request, parse_brl_mention
 from .intent import normalize, validate_catalog_intent, validate_policy_intent, validate_cheapest_intent
-from .context import explicit_product, explicit_order_id, name_in_text, product_amount_requires_clarification
+from .context import explicit_product, explicit_order_id, name_in_text, product_amount_requires_clarification, resolve_commercial_basis
 from .telemetry import bind_operation, event, operation_id, reset_operation
 
 FALLBACK = 'Desculpe, não consegui consultar os dados agora. Tente novamente.'
@@ -131,7 +131,7 @@ class Agent:
     def __init__(self, snapshot, planner, review_submit=None):
         self.catalog=Catalog(snapshot); self.orders=OrderService(snapshot); self.planner=planner; self.snapshot=snapshot; self.review_submit=review_submit
 
-    def answer(self, text, *, installment_request=None, forbid_installment_parse=False, forbid_product_installments=False, product_id=None, customer_id=None, structured=False, correlation_id=None, count_text=None):
+    def answer(self, text, *, installment_request=None, installment_basis=None, forbid_installment_parse=False, forbid_product_installments=False, product_id=None, customer_id=None, structured=False, correlation_id=None, count_text=None):
         correlation_id = correlation_id or operation_id()
         if not isinstance(text,str) or not text.strip() or len(text)>2000:
             return FALLBACK
@@ -160,6 +160,12 @@ class Agent:
                 elif name in {'search_products','recommend_products'} and set(args) <= ({'text','category','min_price','max_price','available_only','installments'} if name=='search_products' else {'text','category','min_price','max_price'}):
                     if any(not isinstance(args[k],str) or len(args[k])>200 for k in ('text','category') if k in args): return FALLBACK
                     if 'available_only' in args and not isinstance(args['available_only'],bool): return FALLBACK
+                    basis = resolve_commercial_basis(text, self.snapshot)
+                    if name == 'search_products' and basis.kind == 'ambiguous' and basis.product is not None:
+                        query = args.get('text')
+                        if not query or set(re.findall(r'\w+', normalize(query))).issubset(
+                                set(re.findall(r'\w+', normalize(basis.product['name'])))):
+                            return CLARIFY
                     for key in ('min_price','max_price'):
                         if key in args:
                             if not isinstance(args[key],str) or len(args[key])>20: return FALLBACK
@@ -168,6 +174,8 @@ class Agent:
                             args[key]=value
                     count=args.pop('installments',None)
                     if count is not None:
+                        if basis.kind in {'ambiguous', 'hypothetical'}:
+                            return CLARIFY
                         spoken = normalize(text)
                         named = [row for row in self.snapshot.tables['products'] if normalize(row['name']) in spoken]
                         if forbid_product_installments or len(named) > 1 or re.search(r'\b(?:compar\w*|versus|vs)\b', spoken):
@@ -190,8 +198,10 @@ class Agent:
                 elif name=='installment_quote' and set(args)=={'amount_brl','installments'}:
                     if not isinstance(args['amount_brl'],str) or len(args['amount_brl'])>20 or type(args['installments']) is not int:
                         return FALLBACK
+                    basis = resolve_commercial_basis(text, self.snapshot)
                     blocked = forbid_installment_parse or product_amount_requires_clarification(text, self.snapshot)
-                    requested=installment_request if blocked else installment_request or parse_installment_request(text)
+                    requested=(None if basis.kind == 'ambiguous' or (basis.kind == 'catalog' and basis.product is not None and basis.amount is not None)
+                               else installment_request if blocked else installment_request or parse_installment_request(text))
                     if requested is None:
                         result={'status':'clarification'}
                     else:
@@ -201,7 +211,10 @@ class Agent:
                             return FALLBACK
                         if not supplied.is_finite() or supplied != requested.stated_amount or args['installments'] != requested.count:
                             return FALLBACK
-                        result=_installment_result(quote_installments(requested.total_amount,requested.count),'valor informado pelo cliente')
+                        basis = resolve_commercial_basis(text, self.snapshot)
+                        result=_installment_result(quote_installments(requested.total_amount,requested.count),
+                            'hipotetico' if basis.kind == 'hypothetical' or
+                            (installment_request is not None and installment_basis == 'hipotetico') else 'valor informado pelo cliente')
                 elif name=='policy' and set(args)=={'topic'} and isinstance(args['topic'],str):
                     if not validate_policy_intent(args['topic'], text):
                         return CLARIFY

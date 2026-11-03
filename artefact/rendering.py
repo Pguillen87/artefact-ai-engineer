@@ -169,11 +169,12 @@ def render_results(results):
                 lines.append(f"O valor informado para {data['product_name']} diverge do preço disponível no snapshot; "
                              'não consigo confirmar um preço efetivo válido para simulação. Consulte a loja.')
             else:
-                statement=(f"O valor informado {_money(reported)} diverge do preço efetivo do catálogo de {_money(catalog)}.")
+                subject = 'O total das parcelas informadas' if data.get('reported_per_installment') else 'O valor informado'
+                statement=(f"{subject} {_money(reported)} diverge do preço efetivo do catálogo de {_money(catalog)}.")
                 if data.get('catalog_quote_authorized') is True:
                     lines.append(statement+' A simulação desta resposta usa somente o preço do catálogo.')
                 else:
-                    lines.append(statement+' Quer que eu simule com o preço efetivo do catálogo?')
+                    lines.append(statement+' Esclareça a base desejada. Quer que eu simule com o preço efetivo do catálogo?')
         elif name=='clarification':
             if not isinstance(data,dict):
                 raise ValueError('invalid clarification')
@@ -186,6 +187,8 @@ def render_results(results):
                 lines.append('Não consegui validar uma das operações e não a executei; esclareça essa parte.')
         elif name=='installment_quote':
             if not isinstance(data,dict): raise ValueError('invalid installment quote')
+            if data.get('basis') == 'hipotetico':
+                lines.append('Simulação hipotética: o valor informado não representa preço de venda.')
             lines.append(_render_installment_quote(data))
         elif name=='promotion':
             if data is None: continue
