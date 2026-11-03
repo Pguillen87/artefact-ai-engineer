@@ -381,7 +381,7 @@ class ConversationAgent:
             clarifications = []
             if (mismatch_result is not None and validate_policy_intent('shipping', text)
                     and not any(plan.name == 'policy' and plan.args.get('topic') == 'shipping' for plan in plans)):
-                clarifications.append({'consulta': 'clarification', 'resultado': {'tool': 'policy'}})
+                clarifications.append({'consulta': 'clarification', 'resultado': {'tool': 'policy', 'topic': 'shipping'}})
             for plan in plans:
                 stage = 'tool'
                 detail = _safe_tool_detail(plan.name, plan.args, status='pending',

@@ -182,6 +182,7 @@ class HermesCommercialBlockerTests(unittest.TestCase):
         answer, agent = self.ask('O Korg Synth 1 Pro custa R$ 900 em 3x? E quais são as regras de frete?', [plan])
         self.assertIn('diverge', answer.lower())
         self.assertIn('não consegui', answer.lower())
+        self.assertIn('frete', answer.lower())
         self.assertNotIn('policy', agent.last_trace['executed_tools'])
 
     def test_hypothetical_followup_does_not_switch_to_catalog(self):
@@ -238,6 +239,18 @@ class HermesCommercialBlockerTests(unittest.TestCase):
         self.assertIn('não consegui', answer.lower())
         self.assertNotIn('policy', agent.last_trace['executed_tools'])
         self.assertTrue(agent.last_trace['rejected_tools'])
+
+    def test_budget_and_divergent_product_price_do_not_authorize_catalog_quote(self):
+        message = 'Quero o Korg Synth 1 Pro por R$ 900 em 3x e tenho orçamento de até R$ 1.500.'
+        plans = [fixtures.call('search_products', {'text': 'Korg Synth 1 Pro',
+                     'max_price': '1500.00', 'installments': 3}),
+                 fixtures.call('installment_quote', {'amount_brl': '900.00', 'installments': 3})]
+        for plan in plans:
+            with self.subTest(tool=plan['name']):
+                answer, agent = self.ask(message, [plan])
+                self.assertNotIn('parcelamento permitido', answer.lower())
+                self.assertNotIn('3x R$ 300,00', answer)
+                self.assertEqual(agent.last_trace['commercial_basis']['kind'], 'ambiguous')
 
     def test_independent_recommendation_is_not_discarded_by_price_conflict(self):
         plans = [fixtures.call('search_products', {'text': 'Korg Synth 1 Pro', 'installments': 3}, 'p'),

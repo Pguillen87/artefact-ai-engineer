@@ -182,7 +182,10 @@ def render_results(results):
             if operation=='search_products':
                 lines.append('Não realizei a busca de produtos porque o filtro não correspondeu ao pedido; esclareça essa parte.')
             elif operation=='policy':
-                lines.append('Não consegui validar a consulta da política; esclareça essa parte para que eu a consulte.')
+                if data.get('topic') == 'shipping':
+                    lines.append('Não consegui responder à pergunta sobre frete; esclareça essa parte para que eu consulte a política.')
+                else:
+                    lines.append('Não consegui validar a consulta da política; esclareça essa parte para que eu a consulte.')
             else:
                 lines.append('Não consegui validar uma das operações e não a executei; esclareça essa parte.')
         elif name=='installment_quote':

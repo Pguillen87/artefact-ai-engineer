@@ -161,9 +161,9 @@ class Agent:
                     if any(not isinstance(args[k],str) or len(args[k])>200 for k in ('text','category') if k in args): return FALLBACK
                     if 'available_only' in args and not isinstance(args['available_only'],bool): return FALLBACK
                     basis = resolve_commercial_basis(text, self.snapshot)
-                    if name == 'search_products' and basis.kind == 'ambiguous' and basis.product is not None:
+                    if name == 'search_products' and basis.kind == 'ambiguous':
                         query = args.get('text')
-                        if not query or set(re.findall(r'\w+', normalize(query))).issubset(
+                        if basis.product is None or not query or set(re.findall(r'\w+', normalize(query))).issubset(
                                 set(re.findall(r'\w+', normalize(basis.product['name'])))):
                             return CLARIFY
                     for key in ('min_price','max_price'):

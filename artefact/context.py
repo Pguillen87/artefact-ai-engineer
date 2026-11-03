@@ -56,6 +56,8 @@ def resolve_commercial_basis(text: str, snapshot) -> CommercialBasis:
     role = ('per_installment' if per_installment else 'total' if amount is not None and has_explicit_total_intent(text)
             else 'ambiguous' if amount is not None else None)
     if has_budget_context(text):
+        if len(amounts) > 1:
+            return CommercialBasis('ambiguous', amount_role='ambiguous')
         return CommercialBasis('budget', amount, amount_role='budget_cap')
     products = []
     exact_products = []
