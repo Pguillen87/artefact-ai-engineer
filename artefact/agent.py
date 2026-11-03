@@ -28,7 +28,7 @@ TOOLS = [
  {'type':'function','name':'installment_quote','description':'Calcula deterministicamente o parcelamento. Use somente quando o cliente informou explicitamente um valor em reais e a quantidade de parcelas; amount_brl deve ser o valor decimal normalizado extraído da mensagem. O servidor confere ambos com o texto antes de calcular.',
   'parameters':{'type':'object','properties':{'amount_brl':{'type':'string'},'installments':{'type':'integer'}},'required':['amount_brl','installments'],'additionalProperties':False}},
  {'type':'function','name':'policy','description':'Consulta política de demonstração.',
-  'parameters':{'type':'object','properties':{'topic':{'type':'string','enum':['shipping','installments','pix','exchange','warranty','regret','hours','contacts']}},'required':['topic'],'additionalProperties':False}},
+  'parameters':{'type':'object','properties':{'topic':{'type':'string','enum':['shipping','installments','payment_mix','pix','exchange','warranty','regret','hours','contacts','scope']}},'required':['topic'],'additionalProperties':False}},
  {'type':'function','name':'request_technical_review','description':'Registra revisão de conflito técnico existente somente a pedido explícito do cliente.',
   'parameters':{'type':'object','properties':{'product_id':{'type':'integer'},'field':{'type':'string','enum':['brand','category_id','specs.keys','specs.strings']},'reason':{'type':'string','enum':['inconsistencia_catalogo']}},'required':['product_id','field','reason'],'additionalProperties':False}},
  {'type':'function','name':'orders','description':'Consulta pedidos fictícios pelo nome completo informado pelo cliente.',

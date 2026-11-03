@@ -37,6 +37,16 @@ class AuthorityTests(unittest.TestCase):
                 agent.answer(text, chat_id=1)
                 self.assertNotIn('3x R$', agent.answer('E em 3x?', chat_id=1))
 
+    def test_same_turn_revocation_rejects_abbreviated_catalog_query(self):
+        for text in ('Quero Korg Synth. Não quero mais Korg.',
+                     'Quero Korg Synth, mas não quero mais Korg.'):
+            with self.subTest(text=text):
+                provider = Mock(); provider.request.return_value = {
+                    'output': [call('search_products', {'text': 'Korg Synth'})]}
+                answer = ConversationAgent(self.snapshot, provider).answer(text, chat_id=1)
+                self.assertNotIn('Korg Synth:', answer)
+                self.assertNotIn('1.127,50', answer)
+
     def test_revocation_and_explicit_reselection(self):
         provider = Mock(); provider.request.side_effect = [
             {'output': [call('search_products', {'text': 'Korg Synth'})]}, {'output': []},
@@ -64,6 +74,11 @@ class AuthorityTests(unittest.TestCase):
         for text in ('Minha compra ficou em R$ 900; quanto fica em 3x?', 'Simule R$ 900 em 3 parcelas.'):
             with self.subTest(text=text):
                 self.assertIn('3x R$ 300,00', ConversationAgent(self.snapshot, provider).answer(text))
+
+    def test_negated_simulation_does_not_authorize_installment_quote(self):
+        provider = Mock(); provider.request.return_value = {'output': [call('installment_quote', {'amount_brl': '900', 'installments': 3})]}
+        answer = ConversationAgent(self.snapshot, provider).answer('Não quero simular R$ 900 em 3x.')
+        self.assertNotIn('3x R$ 300,00', answer)
 
     def test_no_cross_chat_selection(self):
         provider = Mock(); provider.request.side_effect = [

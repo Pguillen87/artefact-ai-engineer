@@ -38,6 +38,17 @@ class CatalogAdminTests(unittest.TestCase):
         self.assertEqual(len(published_snapshot(self.root/'serving.db',self.baseline).tables['products']),1)
         self.admin.rollback(version,'retorno')
         self.assertEqual(len(published_snapshot(self.root/'serving.db',self.baseline).tables['products']),2)
+
+    def test_reordered_canonical_columns_are_mapped_by_header_and_reviewed(self):
+        headers=['created_at','specs','status','stock_quantity','description','category_id','name','price_brl','product_id']
+        values=dict(zip(['product_id','price_brl','name','category_id','description','stock_quantity','status','specs','created_at'],product()))
+        stream=io.StringIO(newline='');writer=csv.DictWriter(stream,fieldnames=headers)
+        writer.writeheader();writer.writerow(values)
+        batch=self.admin.stage(stream.getvalue().encode())
+        preview=self.admin.preview(batch)
+        self.assertEqual(preview['products'][0]['name'],'Korg Piano')
+        self.assertTrue(preview['issues'])
+        self.assertEqual(len(published_snapshot(self.root/'serving.db',self.baseline).tables['products']),1)
     def test_invalid_batch_is_never_staged(self):
         for raw in [csv_bytes(product(price='-1')),csv_bytes(product('1')),csv_bytes(product(),product()),csv_bytes(product(),product('3','bad')),b'wrong,header\n1,2',csv_bytes(product('3','1',''))]:
             with self.subTest(raw=raw):

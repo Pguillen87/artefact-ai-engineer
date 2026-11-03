@@ -7,12 +7,27 @@ from unittest.mock import Mock, patch
 from artefact.codex_local import CodexLocalProvider, CodexQuota, CodexLimit
 
 class CodexLocalTests(unittest.TestCase):
+ def test_provider_requires_a_valid_explicit_model(self):
+  with tempfile.TemporaryDirectory() as d:
+   quota=CodexQuota(Path(d)/'state.db',1)
+   with self.assertRaises(TypeError): CodexLocalProvider('codex.exe',quota,runner=Mock())
+   with self.assertRaises(ValueError): CodexLocalProvider('codex.exe',quota,runner=Mock(),model='--unsafe model')
+
+ def test_provider_pins_an_explicit_model(self):
+  with tempfile.TemporaryDirectory() as d:
+   runner=Mock(return_value=Mock(returncode=0,stdout=json.dumps({'calls':[]})))
+   provider=CodexLocalProvider('codex.exe',CodexQuota(Path(d)/'state.db',1),model='test-model',runner=runner)
+   provider.request([{'role':'user','content':'Oi'}])
+   command=runner.call_args.args[0]
+   model_index=command.index('--model')
+   self.assertEqual(command[model_index+1],'test-model')
+
  def test_plan_maps_structured_output_and_disables_shell(self):
   with tempfile.TemporaryDirectory() as d:
    runner=Mock(return_value=Mock(returncode=0,stdout=json.dumps({'calls':[{'name':'policy','topic':'pix','text':None,'category':None,'min_price':None,'max_price':None,'available_only':None,'product_id':None,'full_name':None}]})))
    quota=CodexQuota(Path(d)/'state.db',2)
    with patch.dict(os.environ,{'OPENAI_API_KEY':'do-not-forward','TELEGRAM_BOT_TOKEN':'do-not-forward'}):
-    provider=CodexLocalProvider('codex.exe',quota,runner=runner)
+    provider=CodexLocalProvider('codex.exe',quota,runner=runner,model='test-model')
     result=provider.request([{'role':'user','content':'Pix?'}])
    self.assertEqual(result['output'][0]['name'],'policy')
    args,kwargs=runner.call_args
@@ -27,19 +42,19 @@ class CodexLocalTests(unittest.TestCase):
  def test_installment_quote_maps_to_the_same_provider_contract(self):
   with tempfile.TemporaryDirectory() as d:
    runner=Mock(return_value=Mock(returncode=0,stdout=json.dumps({'calls':[{'name':'installment_quote','amount_brl':'150.00','installments':2}]})))
-   provider=CodexLocalProvider('codex.exe',CodexQuota(Path(d)/'state.db',1),runner=runner)
+   provider=CodexLocalProvider('codex.exe',CodexQuota(Path(d)/'state.db',1),runner=runner,model='test-model')
    result=provider.request([{'role':'user','content':'R$ 150,00 em 2x'}])
    self.assertEqual(result['output'][0]['name'],'installment_quote')
    self.assertEqual(json.loads(result['output'][0]['arguments']),{'amount_brl':'150.00','installments':2})
  def test_final_answer_mapped_as_response(self):
   with tempfile.TemporaryDirectory() as d:
    runner=Mock(return_value=Mock(returncode=0,stdout='{"answer":"Olá!"}'))
-   result=CodexLocalProvider('codex.exe',CodexQuota(Path(d)/'s.db',2),runner=runner).request([],final=True)
+   result=CodexLocalProvider('codex.exe',CodexQuota(Path(d)/'s.db',2),runner=runner,model='test-model').request([],final=True)
    self.assertEqual(result['output'][0]['content'][0]['text'],'Olá!')
  def test_malformed_or_unknown_tool_is_rejected(self):
   with tempfile.TemporaryDirectory() as d:
    runner=Mock(return_value=Mock(returncode=0,stdout='{"calls":[{"name":"shell"}]}'))
-   with self.assertRaises(ValueError):CodexLocalProvider('codex.exe',CodexQuota(Path(d)/'s.db',2),runner=runner).request([])
+   with self.assertRaises(ValueError):CodexLocalProvider('codex.exe',CodexQuota(Path(d)/'s.db',2),runner=runner,model='test-model').request([])
 
 class DemoFixtureTests(unittest.TestCase):
  def test_demo_fixture_contains_only_synthetic_rows(self):
@@ -52,4 +67,4 @@ class CodexRequiredArgumentsTests(unittest.TestCase):
  def test_required_tool_arguments_cannot_be_null(self):
   with tempfile.TemporaryDirectory() as d:
    runner=Mock(return_value=Mock(returncode=0,stdout=json.dumps({'calls':[{'name':'promotion','product_id':None}]})))
-   with self.assertRaises(ValueError):CodexLocalProvider('codex.exe',CodexQuota(Path(d)/'s.db',2),runner=runner).request([])
+   with self.assertRaises(ValueError):CodexLocalProvider('codex.exe',CodexQuota(Path(d)/'s.db',2),runner=runner,model='test-model').request([])

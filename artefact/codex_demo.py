@@ -33,11 +33,12 @@ def main():
     if os.environ.get('CODEX_DEMO_APPROVED')!='1':
         print('Defina CODEX_DEMO_APPROVED=1 após confirmar uso da cota Codex.',file=sys.stderr);return 2
     path=os.environ.get('CODEX_DEMO_STATE_PATH');limit=os.environ.get('CODEX_DEMO_MAX_CALLS')
+    model=os.environ.get('CODEX_DEMO_MODEL')
     executable=shutil.which('codex.exe') if os.name=='nt' else shutil.which('codex')
-    if not path or not limit or not executable:
-        print('São necessários CODEX_DEMO_STATE_PATH, CODEX_DEMO_MAX_CALLS e Codex CLI no PATH.',file=sys.stderr);return 2
+    if not path or not limit or not model or not executable:
+        print('São necessários CODEX_DEMO_STATE_PATH, CODEX_DEMO_MAX_CALLS, CODEX_DEMO_MODEL e Codex CLI no PATH.',file=sys.stderr);return 2
     try:
-        quota=CodexQuota(path,int(limit));agent=ConversationAgent(synthetic_snapshot(),CodexLocalProvider(executable,quota))
+        quota=CodexQuota(path,int(limit));agent=ConversationAgent(synthetic_snapshot(),CodexLocalProvider(executable,quota,model=model))
     except (ValueError,OSError):
         print('Configuração local inválida.',file=sys.stderr);return 2
     print('Demonstração sintética. Digite uma pergunta por linha; encerre com EOF.')

@@ -199,6 +199,26 @@ class CommercialConversationFlowTests(unittest.TestCase):
         self.assertIn('garantia legal de 90 dias', answer.lower())
         self.assertNotIn('troca imediata', answer.lower())
 
+    def test_exchange_policy_covers_preference_custom_final_sale_and_misuse_cases(self):
+        cases = [
+            ('Comprei na loja há 6 dias. Posso trocar por outra cor?', 'exchange',
+             ('preferência', 'disponibilidade', 'diferença de preço')),
+            ('Meu instrumento personalizado sob encomenda pode ser trocado só porque não gostei?', 'exchange',
+             ('personalizado', 'preferência', 'defeito')),
+            ('Comprei em venda final, mas ele veio com defeito. Tenho algum direito?', 'exchange',
+             ('venda final', 'defeito', 'garantia')),
+            ('Meu produto caiu no chão e quebrou. Isso entra na garantia?', 'warranty',
+             ('mau uso', 'avaliação')),
+            ('Dano por mau uso tem cobertura?', 'warranty',
+             ('mau uso', 'avaliação')),
+        ]
+        for question, topic, expected_terms in cases:
+            with self.subTest(question=question):
+                answer = self._answer(question, None, None,
+                                      _call('policy', {'topic': topic}, 'a'))
+                for term in expected_terms:
+                    self.assertIn(term, answer.lower())
+
     def test_regret_policy_explains_request_window_without_claiming_a_return(self):
         answer = self._answer(
             'Recebi minha compra online há 6 dias e me arrependi. Posso devolver?', None, None,
@@ -209,6 +229,49 @@ class CommercialConversationFlowTests(unittest.TestCase):
         self.assertIn('solicitar', answer.lower())
         self.assertNotIn('devolução iniciada', answer.lower())
         self.assertNotIn('devolução aprovada', answer.lower())
+
+    def test_scope_policy_handles_accessories_and_external_weather_requests(self):
+        cases = [
+            ('Vocês vendem palhetas, cabos e amplificadores?',
+             ('instrumentos', 'não comercializa acessórios')),
+            ('Qual a previsão do tempo para amanhã?',
+             ('fora do escopo', 'previsão do tempo')),
+        ]
+        for question, expected_terms in cases:
+            with self.subTest(question=question):
+                answer = self._answer(question, None, None,
+                                      _call('policy', {'topic': 'scope'}, 'a'))
+                for term in expected_terms:
+                    self.assertIn(term, answer.lower())
+
+    def test_payment_mix_policy_handles_exact_and_above_threshold(self):
+        cases = [
+            'Posso dividir R$ 2.000 entre Pix e cartão?',
+            'Posso dividir R$ 2.000,01 entre Pix e cartão?',
+        ]
+        for question in cases:
+            with self.subTest(question=question):
+                answer = self._answer(question, None, None,
+                                      _call('policy', {'topic': 'payment_mix'}, 'a'))
+                self.assertIn('acima de R$ 2.000,00', answer)
+                self.assertIn('exatamente R$ 2.000,00 não se qualifica', answer)
+                self.assertIn('confirmada com a loja', answer)
+
+    def test_shipping_policy_covers_forecast_heavy_items_and_exact_date_limits(self):
+        cases = [
+            ('Qual o prazo normal de entrega em Campo Grande?',
+             ('1 a 3 dias úteis', 'previsão')),
+            ('Vou comprar um piano digital pesado; o frete é o mesmo?',
+             ('cotação especial', 'confirmar com a loja')),
+            ('Você garante que meu pedido chega amanhã?',
+             ('sem garantia de data exata', 'previsão')),
+        ]
+        for question, expected_terms in cases:
+            with self.subTest(question=question):
+                answer = self._answer(question, None, None,
+                                      _call('policy', {'topic': 'shipping'}, 'a'))
+                for term in expected_terms:
+                    self.assertIn(term, answer.lower())
 
 
 if __name__ == '__main__':

@@ -16,9 +16,19 @@ def product_reference(text: str, name: str) -> str:
     spoken = normalize(text)
     target = normalize(name)
     matches = list(re.finditer(r'(?<!\w)' + re.escape(target) + r'(?!\w)', spoken))
-    if not matches:
-        first = target.split()[0]
-        matches = list(re.finditer(r'(?<!\w)' + re.escape(first) + r'(?!\w)', spoken)) if len(first) >= 3 else []
+    first = target.split()[0]
+    first_matches = list(re.finditer(r'(?<!\w)' + re.escape(first) + r'(?!\w)', spoken)) if len(first) >= 3 else []
+    if matches:
+        last = matches[-1]
+        if first_matches and first_matches[-1].start() > last.start():
+            candidate = first_matches[-1]
+            prefix = spoken[max(spoken.rfind(mark, 0, candidate.start())
+                                for mark in ('.', ';', '!', '?')) + 1:candidate.start()]
+            if re.search(r'\b(?:nao|nunca|sem|exceto|evite|dispenso)\b', prefix):
+                last = candidate
+        matches = [last]
+    elif first_matches:
+        matches = first_matches
     if not matches:
         return 'unmentioned'
     match = matches[-1]
@@ -82,13 +92,15 @@ def validate_policy_intent(topic: str, text: str) -> bool:
     spoken = normalize(text)
     patterns = {
         'exchange': r'\b(?:troca\w*|trocar|defeito\w*)\b',
-        'warranty': r'\b(?:garantia\w*|fabricante)\b',
+        'warranty': r'\b(?:garantia\w*|fabricante|mau uso|cobertura)\b',
         'regret': r'\b(?:arrepend\w*|desist\w*|devolu\w*|devolver)\b',
-        'shipping': r'\b(?:frete|envio|entrega|entregar)\b',
+        'shipping': r'\b(?:frete|envio|entrega|entregar|cheg\w*)\b',
         'installments': r'\b(?:parcel\w*|vezes|crediario)\b',
+        'payment_mix': r'\b(?:combinar|dividir|misturar|formas de pagamento|pagamentos)\b',
         'pix': r'\bpix\b',
         'hours': r'\b(?:horario\w*|funcionamento|aberto|abre|fecha)\b',
         'contacts': r'\b(?:contato\w*|telefone|vendedor\w*|ligar)\b',
+        'scope': r'\b(?:acessorios?|palhetas?|cabos|amplificadores|previsao do tempo|tempo|clima|vendem|vende)\b',
     }
     mentioned = {key for key, pattern in patterns.items() if re.search(pattern, spoken)}
     return topic in mentioned if mentioned else False
@@ -116,7 +128,7 @@ def validate_catalog_intent(name: str, args: dict, text: str, snapshot, product_
                          if re.search(r'(?<!\w)' + re.escape(normalize(p['name'])) + r'(?!\w)', normalized)]
     if any(product_reference(text, product['name']) == 'rejected' for product in explicit_products):
         return False
-    negation = (r'(?:nao quero|nao (?:me )?(?:recomende|recomendar|indique|sugira)|'
+    negation = (r'(?:nao quero(?:\s+mais)?|nao (?:me )?(?:recomende|recomendar|indique|sugira)|'
                 r'nao gosto de|nao o|nao a|sem|exceto)\s+(?:(?:o|a)\s+)?')
     if any(re.search(r'\b' + negation + re.escape(normalize(product['name'])) + r'(?!\w)', normalized)
            for product in explicit_products):
@@ -126,6 +138,11 @@ def validate_catalog_intent(name: str, args: dict, text: str, snapshot, product_
         if not isinstance(query, str) or not query.strip():
             return False
         if not _words(query).issubset(_words(text)):
+            return False
+        query_products = [p for p in snapshot.tables['products']
+                          if _words(query).issubset(_words(p['name']))]
+        if any(product_reference(text, product['name']) == 'rejected'
+               for product in query_products):
             return False
         if re.search(r'\b' + negation + re.escape(normalize(query)) + r'\b', normalized):
             return False

@@ -139,6 +139,8 @@ def has_explicit_total_intent(text: str) -> bool:
     """Require positive authority for treating an amount as a total or simulation."""
     if has_budget_context(text):
         return False
+    if re.search(r'(?i)\bn[aã]o\s+(?:quero\s+(?:mais\s+)?)?simul\w*\b', text):
+        return False
     return bool(re.search(r'(?i)\b(?:simul\w*|parcelar|parcele|pagar|pague)\s+(?:(?:um|o)\s+)?(?:total\s+de\s+|valor\s+de\s+)?r\$|\bcompra\s+(?:ficou|custou|custa|[eé])\s+(?:em\s+)?r\$|\btotal\s+(?:da\s+compra\s+)?(?:[eé]|de|ficou)\s+(?:em\s+)?r\$', text))
 
 

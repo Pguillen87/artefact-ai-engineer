@@ -22,13 +22,14 @@ class HostConfig:
     data_dir: Path
     state_path: Path
     max_calls: int
+    model: str
     token: str = field(repr=False)
     allowed_chat_id: int = field(repr=False)
 
 def read_host_config(env):
     if env.get('ENABLE_CODEX_TELEGRAM')!='1':
         raise ValueError('ENABLE_CODEX_TELEGRAM=1 required for the authorized test')
-    names=('TELEGRAM_BOT_TOKEN','TELEGRAM_ALLOWED_CHAT_ID','ARTEFACT_DATA_DIR','CODEX_DEMO_STATE_PATH','CODEX_DEMO_MAX_CALLS')
+    names=('TELEGRAM_BOT_TOKEN','TELEGRAM_ALLOWED_CHAT_ID','ARTEFACT_DATA_DIR','CODEX_DEMO_STATE_PATH','CODEX_DEMO_MAX_CALLS','CODEX_DEMO_MODEL')
     missing=[key for key in names if not env.get(key)]
     if missing: raise ValueError('Missing environment variables: '+', '.join(missing))
     try:
@@ -40,7 +41,7 @@ def read_host_config(env):
     state_path=Path(env['CODEX_DEMO_STATE_PATH']).resolve()
     if state_path == data_dir or data_dir in state_path.parents:
         raise ValueError('State database must be outside the original data directory')
-    return HostConfig(data_dir,state_path,limit,env['TELEGRAM_BOT_TOKEN'],chat)
+    return HostConfig(data_dir,state_path,limit,env['CODEX_DEMO_MODEL'],env['TELEGRAM_BOT_TOKEN'],chat)
 
 
 def poll_once(client,adapter,offset):
@@ -66,7 +67,7 @@ def main():
         snapshot=load_dataset(config.data_dir,verify_baseline=True)
         state=State(config.state_path)
         quota=CodexQuota(config.state_path,config.max_calls)
-        provider=CodexLocalProvider(executable,quota)
+        provider=CodexLocalProvider(executable,quota,model=config.model)
         client=TelegramClient(config.token)
         agent=ConversationAgent(snapshot,provider,snapshot_loader=(lambda: published_snapshot(Path(os.environ['ARTEFACT_CATALOG_DB']),snapshot)) if os.environ.get('ARTEFACT_CATALOG_DB') else None,review_submit=configured_review_client(os.environ))
         adapter=TelegramAdapter(agent,client.send,state=state,allowed_chat_id=config.allowed_chat_id)

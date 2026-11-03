@@ -27,6 +27,6 @@ class OneInferenceTests(unittest.TestCase):
   with TemporaryDirectory() as d:
    root=Path(d);write_dataset(root);quota=CodexQuota(root/'q.db',1)
    runner=Mock(side_effect=[Mock(returncode=0,stdout='{"calls":[{"name":"policy","topic":"pix"}]}'),AssertionError('unexpected second inference')])
-   provider=CodexLocalProvider('codex.exe',quota,runner)
+   provider=CodexLocalProvider('codex.exe',quota,runner,model='test-model')
    self.assertIn('5%',ConversationAgent(load_dataset(root),provider).answer('Pix?',chat_id=1))
    self.assertEqual(runner.call_count,1);self.assertEqual(quota.usage(),1)
