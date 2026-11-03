@@ -76,6 +76,12 @@ def validate_execution_plan(plan):
     return None
 
 
+def _withhold_price(product):
+    item = {key: value for key, value in product.items()
+            if key not in {'price_brl', 'price_quote', 'installment_quote'}}
+    return dict(item, price_withheld=True)
+
+
 def prepare_commercial_call(name, args, text, snapshot, decision, product_id=None):
     """Validate a proposed quote against the resolved decision, then normalize it.
 
@@ -95,7 +101,8 @@ def prepare_commercial_call(name, args, text, snapshot, decision, product_id=Non
                 or len(args['amount_brl']) > 20):
             raise ValueError('invalid_quote_arguments')
     if not quoting:
-        if decision.kind == 'ambiguous' and decision.product is not None:
+        if (decision.kind == 'ambiguous' and decision.product is not None and
+                not (decision.scope.options and args.get('category') and not args.get('text'))):
             raise ValueError('conflicting_price_basis')
         return name, args
     catalog_options = (name == 'search_products' and decision.allows_catalog_options and
@@ -205,28 +212,41 @@ class Agent:
             if invalid:
                 return invalid
             decision = commercial_decision or resolve_commercial_basis(text, self.snapshot)
+            # Normalize the whole plan before the last isolation check. The same
+            # transformation helper is used by the conversational caller.
+            final_plan = []
+            rejected = set()
+            for index, (name, args) in enumerate(plan):
+                try:
+                    final_plan.append(prepare_commercial_call(name, dict(args), text, self.snapshot, decision, product_id))
+                except ValueError:
+                    rejected.add(index)
+                    final_plan.append((name, args))
+            invalid = validate_execution_plan(final_plan) if final_plan else None
+            if invalid:
+                return invalid
+            # Retain rejected reads so their existing clarification is composed
+            # without suppressing independent valid operations.
+            plan = final_plan
             seen=set(); results=[]
-            for name,args in plan:
+            for index, (name,args) in enumerate(plan):
                 if not isinstance(args,dict): return FALLBACK
                 args = dict(args)
                 signature=json.dumps([name,args],sort_keys=True,ensure_ascii=True)
                 if signature in seen: return FALLBACK
                 seen.add(signature)
-                if name in {'search_products', 'installment_quote'}:
-                    try:
-                        name, args = prepare_commercial_call(name, args, text, self.snapshot, decision, product_id)
-                    except ValueError:
-                        if decision.mismatch() is not None:
-                            clarification = {'consulta': 'price_mismatch', 'resultado': decision.mismatch()}
-                        else:
-                            clarification = {'consulta': 'commercial_clarification', 'resultado': {}}
-                        if len(plan) > 1:
-                            results.append(clarification)
-                            continue
-                        if decision.mismatch() is not None:
-                            from .rendering import render_results
-                            return render_results([clarification])
-                        return CLARIFY
+                if index in rejected:
+                    if decision.mismatch() is not None:
+                        clarification = {'consulta': 'price_mismatch', 'resultado': decision.mismatch()}
+                    else:
+                        clarification = {'consulta': 'commercial_clarification', 'resultado': {}}
+                    if len(plan) > 1:
+                        results.append(clarification)
+                        continue
+                    if decision.mismatch() is not None:
+                        from .rendering import render_results
+                        return render_results([clarification])
+                    return CLARIFY
                 if name in {'search_products','recommend_products','promotion'} and not validate_catalog_intent(name,args,text,self.snapshot,product_id):
                     event(correlation_id,'agent','ground','validation','failure',action=name)
                     return CLARIFY
@@ -249,16 +269,26 @@ class Agent:
                     if name=='recommend_products':
                         args['available_only']=True
                         args['allow_unfiltered']=True
-                    result=self.catalog.search(**args,limit=5)
-                    if name=='search_products':
+                    if decision.scope.max_price is not None:
+                        args['max_price'] = min(args.get('max_price', decision.scope.max_price), decision.scope.max_price)
+                    result=self.catalog.search(**args,limit=5,
+                        excluded_ids=decision.scope.excluded_ids, product_ids=decision.scope.selection_for(args))
+                    if name=='search_products' and not decision.scope.options:
                         explicit = explicit_product(text,self.snapshot)
                         resolved_id = product_id if product_id is not None else explicit['product_id'] if explicit else None
                         if resolved_id is not None:
                             result=tuple(item for item in result if item['product_id']==resolved_id)
                     if count is not None:
                         result=tuple(_attach_installment_quote(item,count) for item in result)
+                    if decision.restriction:
+                        result=tuple(_withhold_price(item) if decision.product is None or
+                                     item['product_id']==decision.product['product_id'] else item for item in result)
                 elif name=='promotion' and set(args)=={'product_id'} and type(args['product_id']) is int:
                     result=self.catalog.promotion(args['product_id'])
+                    if result and args['product_id'] in decision.scope.excluded_ids:
+                        result = None
+                    elif result and decision.restriction and (decision.product is None or args['product_id']==decision.product['product_id']):
+                        result = {'name': result['name'], 'available': result['available'], 'price_withheld': True}
                 elif name=='installment_quote' and set(args)=={'amount_brl','installments'}:
                     requested = decision.request()
                     result=_installment_result(quote_installments(requested.total_amount,requested.count),

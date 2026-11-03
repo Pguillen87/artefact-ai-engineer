@@ -116,7 +116,7 @@ def parse_brl_mention(value: str) -> Decimal | None:
     """Remove sentence punctuation only when the preceding numeric token is complete."""
     if value.endswith('.') and not value.endswith('..'):
         value = value[:-1]
-    elif re.search(r'[.,]\d{2,3},$', value):
+    elif re.search(r'[.,]\d{2,3},$', value) or re.fullmatch(r'\d+,', value):
         value = value[:-1]
     return _parse_brl_token(value)
 

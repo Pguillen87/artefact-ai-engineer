@@ -87,9 +87,14 @@ class InstallmentRegressionQA(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root=Path(directory); write_dataset(root); agent=ConversationAgent(load_dataset(root),Provider())
             answer=agent.answer('Meu orçamento é R$ 900. Quanto custa Korg em 3x?',chat_id=1)
-            self.assertIn('R$ 1.014,75',answer)
-            self.assertIn('3x R$ 338,25',answer)
+            # Final P2 budget guarantee supersedes the old over-budget quote.
+            self.assertNotIn('Korg Synth:',answer)
+            self.assertNotIn('parcelamento permitido',answer)
             self.assertNotIn('3x R$ 300,00',answer)
+            self.assertEqual(agent.last_trace['tool_executions'][0]['result_count'],0)
+            within=agent.answer('Meu orçamento é R$ 1.200. Quanto custa Korg em 3x?',chat_id=1)
+            self.assertIn('R$ 1.014,75',within)
+            self.assertIn('3x R$ 338,25',within)
 
     def test_context_is_not_shared_between_chats(self):
         class Provider:

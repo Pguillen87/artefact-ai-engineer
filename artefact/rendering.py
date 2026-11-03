@@ -104,7 +104,9 @@ def render_results(results):
                 if not isinstance(item,dict) or type(item.get('stock_quantity')) is not int or type(item.get('available')) is not bool:
                     raise ValueError('invalid product')
                 availability='disponível' if item['available'] else 'indisponível'
-                if 'price_quote' in item:
+                if item.get('price_withheld'):
+                    lines.append(f"{item['name']}: {availability} no cadastro; preço não exibido conforme sua restrição.")
+                elif 'price_quote' in item:
                     lines.append(_render_price_quote(item['name'],item['price_quote'],item['available']))
                     lines.append(f"Disponibilidade: {availability} no cadastro, estoque registrado de {item['stock_quantity']} unidade(s).")
                 elif item.get('price_brl') is not None:
@@ -171,8 +173,10 @@ def render_results(results):
             else:
                 subject = 'O total das parcelas informadas' if data.get('reported_per_installment') else 'O valor informado'
                 statement=(f"{subject} {_money(reported)} diverge do preço efetivo do catálogo de {_money(catalog)}.")
-                if data.get('catalog_quote_authorized') is True:
+                if data.get('catalog_quote_executed') is True:
                     lines.append(statement+' A simulação desta resposta usa somente o preço do catálogo.')
+                elif data.get('catalog_quote_authorized') is True:
+                    lines.append(statement+' A base do catálogo foi identificada, mas não executei uma simulação nesta resposta.')
                 else:
                     lines.append(statement+' Esclareça a base desejada. Quer que eu simule com o preço efetivo do catálogo?')
         elif name=='commercial_clarification':
@@ -199,6 +203,9 @@ def render_results(results):
             lines.append(_render_installment_quote(data))
         elif name=='promotion':
             if data is None: continue
-            lines.append(_render_price_quote(data.get('name','Produto'),data,data.get('available')))
+            if data.get('price_withheld'):
+                lines.append(f"{data['name']}: preço e condições comerciais não exibidos conforme sua restrição.")
+            else:
+                lines.append(_render_price_quote(data.get('name','Produto'),data,data.get('available')))
         else: raise ValueError('unknown result')
-    return '\n'.join(lines) if lines else 'Não encontrei informações suficientes para essa consulta.'
+    return '\n'.join(dict.fromkeys(lines)) if lines else 'Não encontrei informações suficientes para essa consulta.'

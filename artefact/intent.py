@@ -14,13 +14,15 @@ def normalize(value: str) -> str:
 def intent_clauses(text: str) -> tuple[str, ...]:
     """Keep decimal tokens intact and separate independently requested operations."""
     return tuple(part.strip() for part in re.split(
-        r'\.(?!\d)|[!?;]|\b(?:mas|porem)\b|,?\s+e\s+(?=(?:o\s+frete|quais|qual\b|nao\b|tenho\b|recomende\b))',
+        r'\.(?!\d)|[!?;]|\b(?:mas|porem)\b|(?:,\s*(?:e\s+)?|\s+e\s+)(?=(?:prefiro|quero|mostre|use|utilize)\b)|,?\s+e\s+(?=(?:o\s+frete|quais|qual\b|nao\b|tenho\b|recomende\b))',
         normalize(text)) if part.strip())
 
 
 def clause_polarity(clause: str) -> str:
     """Shared conservative polarity for a single operation, not an entire message."""
     clause = re.sub(r'\bsem juros\b', '', clause)
+    # Negated obligation removes a confirmation step, not price authority.
+    clause = re.sub(r'\bnao\s+(?:precisa|e necessario)\s+confirmar\b', 'dispensa confirmacao', clause)
     if re.search(r'\b(?:nao|nunca|sem|exceto|evite|dispenso|proibido)\b', clause):
         return 'negative'
     if re.search(r'\b(?:se|caso|talvez|quando|apos|depois|desde que)\b', clause):
@@ -28,6 +30,18 @@ def clause_polarity(clause: str) -> str:
     if re.search(r'\b(?:palavra|texto|exemplo de frase|mencionei)\b', clause):
         return 'incidental'
     return 'affirmative'
+
+
+def requests_catalog_price(clause: str) -> bool:
+    return (clause_polarity(clause) == 'affirmative' and 'catalogo' in clause and
+            bool(re.search(r'\b(?:confirme|confirmo|confirmar|utilize|usar|use)\b', clause)) and
+            not re.search(r'\b(?:incorret\w*|errad\w*|fals\w*)\b', clause))
+
+
+def requests_options(text: str) -> bool:
+    return any(clause_polarity(clause) == 'affirmative' and
+               re.search(r'\b(?:opcoes|alternativas|recomende|mostre tambem|outros|outras)\b', clause)
+               for clause in intent_clauses(text))
 
 
 _GENERIC_PRODUCT_WORDS = {'teclado', 'sintetizador', 'arranjador', 'violao', 'guitarra',
@@ -78,7 +92,8 @@ def product_reference(text: str, name: str) -> str:
         prefix, tail = clause[:match.start()], clause[match.end():]
         polarity = clause_polarity(prefix)
         if polarity == 'negative':
-            return 'rejected'
+            # Rejecting a price operation is not rejecting the product itself.
+            return 'restricted' if re.search(r'\b(?:catalogo|preco|simul\w*|parcel\w*)\b', clause) else 'rejected'
         if polarity in {'conditional', 'incidental'}:
             return polarity
         # A trailing revocation can refer to the same product without repeating it.
@@ -112,6 +127,20 @@ def _category_terms(value: str) -> set[str]:
             word = word[:-1]
         terms.add(word)
     return terms
+
+
+def mentioned_category_ids(text: str, snapshot) -> frozenset[int]:
+    normalized = normalize(text)
+    spoken_terms = _category_terms(text)
+    mentioned_categories = {c['category_id'] for c in snapshot.tables['categories']
+                            if _category_terms(c['name']).intersection(spoken_terms)}
+    if 'sopro' in spoken_terms:
+        spoken = _words(text)
+        qualifier = 'metais' if spoken.intersection({'metal','metais'}) else 'madeiras' if spoken.intersection({'madeira','madeiras'}) else None
+        if qualifier:
+            mentioned_categories = {c['category_id'] for c in snapshot.tables['categories']
+                                    if c['category_id'] in mentioned_categories and qualifier in _words(c['name'])}
+    return frozenset(mentioned_categories)
 
 
 def _non_price_unit(text: str, end: int) -> bool:
@@ -245,15 +274,7 @@ def validate_catalog_intent(name: str, args: dict, text: str, snapshot, product_
             if re.search(r'\b[a-z]+\s+(?:ou|versus|vs)\s+' + re.escape(term) + r'(?!\w)', normalized):
                 return False
     category = args.get('category')
-    spoken_terms = _category_terms(text)
-    mentioned_categories = {c['category_id'] for c in snapshot.tables['categories']
-                            if _category_terms(c['name']).intersection(spoken_terms)}
-    if 'sopro' in spoken_terms:
-        spoken = _words(text)
-        qualifier = 'metais' if spoken.intersection({'metal','metais'}) else 'madeiras' if spoken.intersection({'madeira','madeiras'}) else None
-        if qualifier:
-            mentioned_categories = {c['category_id'] for c in snapshot.tables['categories']
-                                    if c['category_id'] in mentioned_categories and qualifier in _words(c['name'])}
+    mentioned_categories = mentioned_category_ids(text, snapshot)
     if len(mentioned_categories) > 1 and len(explicit_products) != 1:
         return False
     if category is not None:

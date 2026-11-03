@@ -56,7 +56,7 @@ class Catalog:
         return {'status':'none_available', **result, 'pix_price_brl':pix_price(price, False),
                 'checkout_price_brl':price}
 
-    def search(self, text=None, *, category=None, min_price=None, max_price=None, available_only=False, limit=20, allow_unfiltered=False):
+    def search(self, text=None, *, category=None, min_price=None, max_price=None, available_only=False, limit=20, allow_unfiltered=False, excluded_ids=(), product_ids=()):
         for value in (text, category):
             if value is not None and (not isinstance(value, str) or not value.strip()):
                 raise ValueError('empty search criterion')
@@ -75,6 +75,8 @@ class Catalog:
         categories = {c['category_id']: _name(c['name']) for c in self._snapshot.tables['categories']}
         found = []
         for p in self._snapshot.tables['products']:
+            if p['product_id'] in excluded_ids or (product_ids and p['product_id'] not in product_ids):
+                continue
             if (query is not None and query not in _name(p['name'])) or (category is not None and categories[p['category_id']] != _name(category)):
                 continue
             item = self.product(p['product_id'])

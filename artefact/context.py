@@ -8,7 +8,7 @@ from typing import Literal
 from .commercial import (has_budget_context, has_explicit_total_intent, has_order_context, money_mentions,
                          extract_installment_count, parse_installment_request,
                          InstallmentRequest)
-from .intent import normalize, product_reference, mentioned_products, intent_clauses, clause_polarity
+from .intent import normalize, product_reference, mentioned_products, intent_clauses, clause_polarity, requests_catalog_price, requests_options, mentioned_category_ids
 from .services import Catalog
 
 
@@ -31,6 +31,18 @@ class MonetaryValue:
 
 
 @dataclass(frozen=True)
+class CatalogScope:
+    max_price: Decimal | None = None
+    excluded_ids: frozenset[int] = frozenset()
+    selected_ids: tuple[int, ...] = ()
+    options: bool = False
+    category_ids: frozenset[int] = frozenset()
+
+    def selection_for(self, args: dict) -> tuple[int, ...]:
+        return () if self.options else self.selected_ids
+
+
+@dataclass(frozen=True)
 class CommercialBasis:
     kind: Literal['catalog', 'hypothetical', 'total', 'budget', 'ambiguous', 'restricted', 'none']
     amount: Decimal | None = None
@@ -42,6 +54,7 @@ class CommercialBasis:
     restriction: str | None = None
     values: tuple[MonetaryValue, ...] = ()
     source: str = 'user'
+    scope: CatalogScope = CatalogScope()
 
     @property
     def price_source(self) -> str | None:
@@ -54,7 +67,9 @@ class CommercialBasis:
     @property
     def allows_catalog_options(self) -> bool:
         """A budget filters catalog prices; it never becomes their quoted total."""
-        return self.kind == 'budget' and self.restriction is None and self.count is not None
+        excluded_target = (self.scope.options and self.product is not None and
+                           self.product['product_id'] in self.scope.excluded_ids)
+        return self.count is not None and ((self.kind == 'budget' and self.restriction is None) or excluded_target)
 
     @property
     def quote_allowed(self) -> bool:
@@ -80,20 +95,13 @@ class CommercialBasis:
             return None
         return {'product_name': self.product['name'], 'reported_amount_brl': compared,
                 'reported_per_installment': self.amount_role == 'per_installment',
-                'catalog_amount_brl': self.catalog_amount,
+                'catalog_amount_brl': None if self.restriction else self.catalog_amount,
                 'catalog_quote_authorized': self.kind == 'catalog' and self.restriction is None}
 
 
 def confirms_catalog_price(text: str) -> bool:
     """Only explicit affirmative confirmation within a single clause grants authority."""
-    for clause in intent_clauses(text):
-        if not re.search(r'\bcatalogo\b', clause):
-            continue
-        if clause_polarity(clause) != 'affirmative' or re.search(r'\b(?:incorret\w*|errad\w*|fals\w*)\b', clause):
-            continue
-        if re.search(r'\b(?:confirme|confirmo|confirmar|utilize|usar|use)\b', clause):
-            return True
-    return False
+    return any(requests_catalog_price(clause) for clause in intent_clauses(text))
 
 
 def resolve_commercial_basis(text: str, snapshot, previous: ConversationContext | None = None) -> CommercialBasis:
@@ -103,6 +111,10 @@ def resolve_commercial_basis(text: str, snapshot, previous: ConversationContext 
     follow-ups; an explicit new product request is evaluated on its own merits.
     """
     products = mentioned_products(text, snapshot)
+    clauses = intent_clauses(text)
+    catalog_correction = bool(clauses and requests_catalog_price(clauses[-1]))
+    if not products and catalog_correction and previous and previous.commercial and previous.commercial.product:
+        products = [previous.commercial.product]
     count_text = normalize(text)
     for product in products:
         count_text = count_text.replace(normalize(product['name']), '')
@@ -120,7 +132,6 @@ def resolve_commercial_basis(text: str, snapshot, previous: ConversationContext 
                        catalog_amount=catalog['price_quote'].get('checkout_price_brl') if catalog else None,
                        source='session')
 
-    clauses = intent_clauses(text)
     candidates = [p for p in products if product_reference(text, p['name']) != 'rejected']
     product = candidates[0] if len(candidates) == 1 else products[0] if len(products) == 1 else None
     catalog = Catalog(snapshot).product(product['product_id']) if product else None
@@ -164,9 +175,30 @@ def resolve_commercial_basis(text: str, snapshot, previous: ConversationContext 
                 restriction = polarity
             elif re.search(r'\b(?:incorret\w*|errad\w*|fals\w*)\b', clause):
                 restriction = 'disputed_price'
+            elif requests_catalog_price(clause):
+                restriction = None
 
     relevant = [value for value in financial if value.role != 'budget']
     budgets = [value for value in financial if value.role == 'budget']
+    # Scope is mandatory server-side input, independent of optional provider filters.
+    categories = mentioned_category_ids(text, snapshot) | frozenset(row['category_id'] for row in products)
+    prior_scope = previous.commercial.scope if previous and previous.commercial else CatalogScope()
+    related = (bool(categories.intersection(prior_scope.category_ids)) or
+               (not categories and requests_options(text)) or product_followup(text) or product_installment_followup(text))
+    inherited = previous.commercial.scope if previous and previous.commercial and related else CatalogScope()
+    excluded = set(inherited.excluded_ids)
+    for row in products:
+        reference = product_reference(text, row['name'])
+        if reference == 'rejected':
+            excluded.add(row['product_id'])
+        elif reference == 'affirmative':
+            excluded.discard(row['product_id'])
+    cap = budgets[0].amount if len(budgets) == 1 else inherited.max_price
+    if any(clause_polarity(clause) == 'affirmative' and requests_options(clause) and
+           re.search(r'\bacima\b', clause) for clause in clauses):
+        cap = None
+    selected = tuple(p['product_id'] for p in candidates if p['product_id'] not in excluded)
+    scope = CatalogScope(cap, frozenset(excluded), selected, bool(requests_options(text)), categories or inherited.category_ids)
     value = relevant[0] if len(relevant) == 1 else budgets[0] if not relevant and len(budgets) == 1 else None
     amount = value.amount if value else None
     role = value.role if value else 'ambiguous' if financial else None
@@ -175,11 +207,13 @@ def resolve_commercial_basis(text: str, snapshot, previous: ConversationContext 
     common = dict(amount=amount, product=product, catalog_amount=catalog_amount,
                   amount_role='per_installment' if per_part else 'total' if role == 'declared_total' else
                               'budget_cap' if role == 'budget' else 'stated_price' if role == 'stated_price' else 'ambiguous' if amount is not None else None,
-                  total_amount=total, count=count, restriction=restriction, values=tuple(values))
+                  total_amount=total, count=count, restriction=restriction, values=tuple(values), scope=scope)
     if restriction:
         return CommercialBasis('ambiguous' if amount is not None else 'restricted', **common)
     if hypothetical and amount is not None and len(relevant) == 1:
         return CommercialBasis('hypothetical', **common)
+    if catalog_correction and product and not mentioned_products(text, snapshot):
+        return CommercialBasis('catalog', **dict(common, amount=None, amount_role='catalog_price', total_amount=catalog_amount, source='session'))
     if budgets and not relevant:
         return CommercialBasis('catalog' if product else 'budget', **common)
     if products:

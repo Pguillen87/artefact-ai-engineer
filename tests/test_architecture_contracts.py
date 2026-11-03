@@ -172,7 +172,9 @@ class ArchitectureContracts(unittest.TestCase):
         agent=ConversationAgent(self.snapshot,provider)
         self.assertIn('Korg Synth:',agent.answer('Procuro Korg',chat_id=1))
         self.assertIn('Korg Synth:',agent.answer('E o preço dele?',chat_id=1))
-        self.assertIn('Korg Synth:',agent.answer('Meu orçamento é R$ 900, quero Korg',chat_id=1))
+        # Final P2 decision: a budget is a mandatory result ceiling, even when
+        # the provider omits max_price. The effective Korg price exceeds R$900.
+        self.assertNotIn('Korg Synth:',agent.answer('Meu orçamento é R$ 900, quero Korg',chat_id=1))
         self.assertIn('informe um único valor',agent.answer('Esse valor em 3x?',chat_id=1))
 
     def test_explicit_product_is_retained_even_without_initial_tool(self):

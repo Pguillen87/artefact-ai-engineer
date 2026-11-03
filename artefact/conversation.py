@@ -366,7 +366,10 @@ class ConversationAgent:
                         self.last_trace['tool_executions'].append(detail)
                         self.last_trace['rejected_tools'].append({'name': plan.name, 'reason': reason})
                         if len(plans) > 1 or results:
-                            clarifications.append({'consulta': 'clarification', 'resultado': {'tool': plan.name}})
+                            need = {'tool': plan.name}
+                            if plan.name == 'policy' and validate_policy_intent('shipping', text):
+                                need['topic'] = 'shipping'
+                            clarifications.append({'consulta': 'clarification', 'resultado': need})
                             continue
                         self.last_trace.update(status='clarification', error_code=None)
                         event(op, 'conversation', 'tool', 'validation', 'failure', action=plan.name)
@@ -430,12 +433,18 @@ class ConversationAgent:
                 event(op, 'conversation', 'complete', 'tool', 'empty', duration_ms=int((time.monotonic()-started)*1000))
                 return 'Não encontrei informações suficientes para essa consulta.'
             stage = 'render'
+            if mismatch_result is not None:
+                mismatch_result['catalog_quote_executed'] = any(
+                    entry['consulta'] == 'installment_quote' and entry['resultado'].get('status') in {'eligible', 'below_minimum'} or
+                    entry['consulta'] == 'search_products' and any(item.get('installment_quote', {}).get('status') in {'eligible', 'below_minimum'}
+                                                                 for item in entry['resultado'])
+                    for entry in results)
             answer = render_results(results)
             if len(answer) > 3500:
                 event(op, 'conversation', 'complete', 'validation', 'failure', side_effect='committed' if written else 'none', duration_ms=int((time.monotonic()-started)*1000))
                 return 'A resposta é longa demais. Por favor, refine sua consulta.'
             self._remember(self.history, chat_id, (messages + [{'role': 'assistant', 'content': answer}])[-6:])
-            self.last_trace.update(status='partial' if clarifications or (mismatch_result is not None and self.last_trace['executed_tools']) else 'clarification' if mismatch_result is not None and not mismatch_result['catalog_quote_authorized'] else 'success',
+            self.last_trace.update(status='clarification' if not self.last_trace['executed_tools'] else 'partial' if clarifications or mismatch_result is not None else 'success',
                                    stage='complete', error_code=None)
             event(op, 'conversation', 'complete', 'tool', 'success',
                   side_effect='committed' if written else 'none', duration_ms=int((time.monotonic()-started)*1000))
