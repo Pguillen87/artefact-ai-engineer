@@ -44,7 +44,7 @@ class ProductHandler(Handler):
         if body and not body.startswith('<!doctype') and not body.startswith('{') and not (extra or {}).get('Content-Type','').startswith('text/javascript'):
             body=self.layout(body)
         raw=body.encode('utf-8');self.send_response(status)
-        headers={'Content-Type':'text/html; charset=utf-8','Content-Length':str(len(raw)), 'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",'Referrer-Policy':'no-referrer'}
+        headers={'Content-Type':'text/html; charset=utf-8','Content-Length':str(len(raw)), 'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",'Referrer-Policy':'same-origin'}
         headers.update(extra or {})
         for key,value in headers.items():self.send_header(key,value)
         self.end_headers();self.wfile.write(raw)

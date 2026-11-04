@@ -13,6 +13,7 @@ class ProductWebTests(unittest.TestCase):
                 conn.request('GET','/',headers={'Authorization':auth})
                 response=conn.getresponse(); body=response.read().decode()
                 self.assertEqual(response.status,200)
+                self.assertEqual(response.getheader('Referrer-Policy'),'same-origin')
                 self.assertIn('Sem dataset ativo',body)
                 self.assertIn('Configura\u00e7\u00e3o de IA',body)
                 self.assertIn('Chat de teste',body)
