@@ -132,6 +132,11 @@ class ProductWebTests(unittest.TestCase):
         self.assertEqual(status,303)
         active=self.server.datasets.active_version()
         self.assertIsNotNone(active)
+        imported_html=self.request('GET','/?view=files&notice=imported')[2]
+        self.assertEqual(imported_html.count('class="file-state"'),6)
+        for name,_ in files:
+            self.assertIn(name,imported_html)
+        self.assertIn('import-success',imported_html)
         for invalid in (files[:-1], files+[files[0]], [(n,b'bad') if n=='products.csv' else (n,b) for n,b in files]):
             body, content_type = self.multipart(invalid)
             self.assertEqual(self.request('POST','/dataset/import',body=body,headers={'Content-Type':content_type})[0],400)
@@ -176,6 +181,58 @@ class ProductWebTests(unittest.TestCase):
         self.assertEqual(status, 201)
         self.assertEqual(json.loads(body), {'id':123})
         self.assertIn('application/json', headers['Content-Type'])
+
+    def test_async_chat_contract_and_json_errors(self):
+        import json
+        headers = {'Accept':'application/json'}
+        code, _, body = self.request('POST','/chat/send',{'id':'test','message':'hello'},headers=headers)
+        self.assertEqual(code,401)
+        self.assertEqual(json.loads(body)['error'],'login_required')
+        self.login()
+        code, _, body = self.request('POST','/chat/send',{'csrf':'bad','id':'test','message':'hello'},headers=headers)
+        self.assertEqual(code,403)
+        self.assertEqual(json.loads(body)['error'],'invalid_csrf')
+        with patch.object(ProductHandler,'api',return_value={'id':'new-chat'}) as api:
+            code, _, body = self.request('POST','/chat/create',headers=headers)
+            self.assertEqual(code,201)
+            self.assertEqual(json.loads(body)['id'],'new-chat')
+            self.assertEqual(api.call_count,1)
+        session = {'id':'new-chat','messages':[{'role':'user','content':'hello'},{'role':'assistant','content':'reply'}]}
+        with patch.object(ProductHandler,'api',return_value={'answer':'reply','session':session}) as api:
+            code, response_headers, body = self.request('POST','/chat/send',{'id':'new-chat','message':'hello'},headers=headers)
+            self.assertEqual(code,200)
+            self.assertIn('application/json',response_headers['Content-Type'])
+            self.assertEqual(json.loads(body)['session'],session)
+            self.assertEqual(api.call_count,1)
+        with patch.object(ProductHandler,'api',side_effect=ValueError('budget_exhausted')) as api:
+            code, _, body = self.request('POST','/chat/send',{'id':'new-chat','message':'hello'},headers=headers)
+            self.assertEqual(code,400)
+            self.assertEqual(json.loads(body)['id'],'new-chat')
+            self.assertEqual(json.loads(body)['error'],'budget_exhausted')
+            self.assertEqual(api.call_count,1)
+        with patch.object(ProductHandler,'api',side_effect=ValueError('agent_unavailable')):
+            code, _, body = self.request('POST','/chat/send',{'id':'new-chat','message':'hello'},headers=headers)
+            self.assertEqual(code,503)
+            self.assertEqual(json.loads(body)['id'],'new-chat')
+
+    def test_slow_send_does_not_block_settings(self):
+        self.login()
+        started = threading.Event(); release = threading.Event(); replies = []
+        def api(handler, method, path, payload=None):
+            started.set()
+            release.wait(4)
+            return {'answer':'done'}
+        def send():
+            replies.append(self.request('POST','/chat/send',{'id':'test','message':'slow'},headers={'Accept':'application/json'})[0])
+        with patch.object(ProductHandler,'api',api):
+            worker = threading.Thread(target=send); worker.start()
+            try:
+                self.assertTrue(started.wait(2))
+                self.assertEqual(self.request('GET','/?view=settings')[0],200)
+                self.assertTrue(worker.is_alive())
+            finally:
+                release.set(); worker.join(5)
+        self.assertEqual(replies,[200])
 
     def test_restart_loads_published_catalog_for_reviews(self):
         data = self.root / 'csv'; data.mkdir(); write_dataset(data)

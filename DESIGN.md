@@ -24,7 +24,9 @@ Arquivos        Importação múltipla + arquivos escolhidos + resultado
 Configurações   IA + vendedor; limites recolhidos em Avançado
 ```
 
-Uma única central, sem duplicação do fluxo de importação. Cada aba renderiza apenas sua tarefa. No celular, a navegação passa para o topo e os formulários ficam em uma coluna. O chat não depende de abrir os formulários.
+Uma única central, sem duplicação do fluxo de importação. Cada aba renderiza apenas sua tarefa. No celular, um botão de três barras abre a navegação lateral com fundo sobreposto; Escape, fechar ou clicar fora devolve o foco ao botão. Os formulários ficam em uma coluna. O chat não depende de abrir os formulários.
+
+O chat segue a referência de mensageiro solicitada: cabeçalho compacto, avatar tipográfico, fundo `#efeae2`, balões brancos e verdes `#d9f5c9`, envio verde `#128c7e` e cabeçalho móvel `#075e54`. Campo arredondado na parte inferior e rolagem apenas da conversa, respeitando a altura visível. A identidade da central permanece na navegação.
 
 ## Estados e ações
 
@@ -32,4 +34,6 @@ Uma única central, sem duplicação do fluxo de importação. Cada aba renderiz
 - Salvar não faz inferência. Testar e ativar é uma ação explícita, visível junto à configuração da IA.
 - Erros permanecem no formulário correspondente e preservam valores não secretos. Nunca refletir a chave API no HTML.
 - Feedback fica junto à ação. Bloquear envio duplicado enquanto uma solicitação estiver em andamento.
+- Envio do chat sem navegação: mensagem imediata, estado Respondendo e confirmação pelo backend. Falha incerta exige atualização, preserva rascunho por conversa na sessão do navegador e nunca dispara reenvio automático.
+- Arquivos selecionados ficam neutros; os arquivos de uma base ativada recebem check verde e Importado. A confirmação de uma nova importação tem movimento breve, desativado com redução de movimento.
 - Preservar foco visível, contraste, navegação por teclado, labels, estado ativo da navegação e redução de movimento.

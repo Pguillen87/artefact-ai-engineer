@@ -59,8 +59,13 @@ class ProductHandler(Handler):
         if not self._host():
             self._send(400, 'Endereço inválido.'); return False
         if not self._authenticated():
-            self._send(303, '', {'Location': '/login'}); return False
+            if self._wants_json(): self._send(401, json.dumps({'error':'login_required','message':'Sua sessão expirou. Entre novamente para continuar.'}))
+            else: self._send(303, '', {'Location': '/login'})
+            return False
         return True
+
+    def _wants_json(self):
+        return 'application/json' in self.headers.get('Accept', '')
 
     def _send(self, status, body='', extra=None):
         if body and not body.startswith('<!doctype') and not body.startswith('{') and not (extra or {}).get('Content-Type', '').startswith(('text/javascript', 'application/json')):
@@ -71,7 +76,7 @@ class ProductHandler(Handler):
         self.send_response(status)
         headers = {'Content-Type': 'text/html; charset=utf-8', 'Content-Length': str(len(raw)),
                    'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
-                   'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+                   'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
                    'Referrer-Policy': 'same-origin'}
         headers.update(extra or {})
         for key, value in headers.items(): self.send_header(key, value)
@@ -87,7 +92,7 @@ class ProductHandler(Handler):
             ready = self.server.provider_config.status()
             entry = ready['providers'].get(ready['active'], {})
             online = bool(entry.get('has_key') and entry.get('verified'))
-            shell = ('<div class="app-shell"><aside class="sidebar"><a class="wordmark" href="/">Empório<span>da Música</span></a>'
+            shell = ('<div class="app-shell view-' + escape(active, quote=True) + '"><div class="mobile-bar"><button class="menu-toggle" type="button" aria-label="Abrir menu" aria-controls="app-menu" aria-expanded="false"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button><span>Empório da Música</span></div><button class="menu-backdrop" type="button" aria-label="Fechar menu" hidden tabindex="-1"></button><aside class="sidebar" id="app-menu"><button type="button" class="drawer-close" aria-label="Fechar menu"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button><a class="wordmark" href="/">Empório<span>da Música</span></a>'
                      '<p class="sidebar-caption">Central de atendimento</p><nav aria-label="Navegação principal">' + nav + '</nav>'
                      '<div class="sidebar-footer"><span class="connection ' + ('connected' if online else '') + '">' + ('IA conectada' if online else 'IA não configurada') + '</span>'
                      + self.form('/logout', '', 'Sair') + '</div></aside><main id="main-content">' + body + '</main></div>')
@@ -145,10 +150,13 @@ class ProductHandler(Handler):
         active = self.server.datasets.active_version()
         view = query.get('view', ['settings'])[0]
         body = '<div class="settings">'
-        body += '<section class="file-panel" id="import"><h2>Importar CSVs</h2><p class="muted">Selecione os seis arquivos da loja. A base atual só será substituída se todos forem válidos.</p>'
+        body += '<section class="file-panel' + (' import-success' if query.get('notice',[''])[0] == 'imported' else '') + '" id="import"><h2>Importar CSVs</h2><p class="muted">Selecione os seis arquivos da loja. A base atual só será substituída se todos forem válidos.</p>'
         body += '<p class="hint">' + ('Base pronta para atendimento.' if active else 'Sem dataset ativo. Selecione os seis CSVs para começar.') + '</p>'
+        labels = getattr(self.server, 'imported_labels', {}).get(active, [name + '.csv' for name in SCHEMAS]) if active is not None else []
+        check = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>'
+        imported = ''.join('<li class="imported-file"><span class="file-name">' + escape(name) + '</span><span class="file-state">' + check + 'Importado</span></li>' for name in labels)
         body += self.form('/dataset/import', '<label for="datasets">Arquivos CSV</label><input id="datasets" type="file" name="datasets" accept=".csv" multiple required>'
-                          '<ul id="file-list" class="file-list"></ul><p class="hint">Categories, customers, order_items, orders, products e promotions.</p>',
+                          '<ul id="file-list" class="file-list" aria-label="Arquivos da base atual">' + imported + '</ul><p class="hint">Categories, customers, order_items, orders, products e promotions.</p>',
                           'Importar CSVs', attrs='enctype="multipart/form-data"') + '</section>'
         if view == 'files': return body + '</div>'
         state = self.server.provider_config.status()
@@ -184,7 +192,7 @@ class ProductHandler(Handler):
         state = self.server.provider_config.status()
         provider = state['providers'].get(state['active'], {})
         ready = self.server.datasets.active_version() is not None and provider.get('has_key') and provider.get('verified')
-        body = '<section class="card chat" id="chat"><div class="chat-top"><div><h2>Conversa com o cliente</h2><p class="muted">Respostas com os dados e as políticas da loja.</p></div>'
+        body = '<section class="card chat" id="chat"><div class="chat-top"><div class="chat-identity"><span class="chat-avatar" aria-hidden="true">EM</span><div><h2>Empório da Música</h2><p class="muted">Assistente da loja</p></div></div>'
         if ready: body += self.form('/chat/create', '', 'Nova conversa')
         body += '</div>'
         sessions = []; session = None; error = ''; missing_session = False
@@ -281,11 +289,13 @@ class ProductHandler(Handler):
             return self._review_request()
         if not self._host(): self._send(400, 'Endereço inválido.'); return
         if self.path != '/login' and not self._guard(): return
-        if not same_origin(self.headers): self._send(403, 'Origem inválida. Reabra o painel e tente novamente.'); return
+        if not same_origin(self.headers):
+            self._send(403, json.dumps({'error':'invalid_origin','message':'Reabra a página e tente novamente.'}) if self._wants_json() else 'Origem inválida. Reabra o painel e tente novamente.'); return
         fields = {}; sid = ''
         try:
             fields, files = self._read_form()
-            if not hmac.compare_digest(fields.get('csrf', ''), self.server.csrf): self._send(403, 'Sessão inválida. Reabra o painel.'); return
+            if not hmac.compare_digest(fields.get('csrf', ''), self.server.csrf):
+                self._send(403, json.dumps({'error':'invalid_csrf','message':'Sua página expirou. Atualize a conversa antes de enviar.'}) if self._wants_json() else 'Sessão inválida. Reabra o painel.'); return
             if self.path == '/login':
                 username = fields.get('username', '')
                 password = fields.get('password', '')
@@ -301,7 +311,8 @@ class ProductHandler(Handler):
                 self._send(303, '', {'Location': '/login', 'Set-Cookie': 'artefact_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0'}); return
             location = '/?view=settings&notice=saved'
             if self.path == '/dataset/import':
-                self.server.datasets.import_files(files, preserve_legacy=self.server.datasets.active_version() is None)
+                version = self.server.datasets.import_files(files, preserve_legacy=self.server.datasets.active_version() is None)
+                self.server.imported_labels = {version:[name for name, _ in files]}
                 self.refresh_admin(); location = '/?view=files&notice=imported'
             elif self.path == '/dataset/activate': self.server.datasets.activate(int(fields['version']))
             elif self.path == '/seller-contact':
@@ -327,17 +338,23 @@ class ProductHandler(Handler):
                 self.server.provider_config.activate(provider); location = '/?view=settings&notice=activated&provider=' + provider
             elif self.path == '/ai/remove': self.server.provider_config.remove_key(fields['provider'])
             elif self.path == '/chat/create':
-                result = self.api('POST', '/sessions', {}); location = '/?id=' + result['id']
+                result = self.api('POST', '/sessions', {})
+                if self._wants_json(): self._send(201, json.dumps({'id':result['id']})); return
+                location = '/?id=' + result['id']
             elif self.path == '/chat/send':
                 sid = fields.get('id')
                 if not sid: sid = self.api('POST', '/sessions', {})['id']
-                self.api('POST', '/sessions/' + sid + '/messages', {'message': fields['message']})
+                result = self.api('POST', '/sessions/' + sid + '/messages', {'message': fields['message']})
+                if self._wants_json():
+                    self._send(200, json.dumps({'id':sid, 'answer':result['answer'], 'session':result.get('session')},ensure_ascii=False)); return
                 location = '/?id=' + sid
             elif self.path == '/chat/delete': self.api('DELETE', '/sessions/' + fields['id']); location = '/#chat'
             else: self._send(404, 'Ação não encontrada.'); return
             self._send(303, '', {'Location': location})
         except (StructuralError, ValueError, KeyError, TypeError, UnicodeError) as exc:
             message = self.friendly(exc)
+            if self._wants_json():
+                self._send(503 if str(exc) in ('agent_unavailable','internal_error') else 400, json.dumps({'error':str(exc) if str(exc) in ('budget_exhausted','provider_missing','dataset_missing','session_not_found','agent_unavailable','provider_unavailable') else 'invalid_request', 'message':message, 'id':sid or fields.get('id','')},ensure_ascii=False)); return
             if isinstance(exc, StructuralError):
                 message = str(exc)
                 for old, new in [('invalid header','cabeçalho inválido'),('malformed row','linha malformada'),('invalid typed field or duplicate key','campo inválido ou identificador duplicado'),('invalid encoding or CSV','codificação ou CSV inválido'),('missing reference to','referência ausente em')]: message = message.replace(old,new)
@@ -347,7 +364,8 @@ class ProductHandler(Handler):
             query.update({key:[fields[key]] for key in ('model','max_calls','max_usd','input_price','output_price') if key in fields})
             try: self._send(400, self._render(query, error=message))
             except (ValueError, OSError, sqlite3.Error): self._send(503, '<p class="notice error">' + escape(message) + '</p><a href="/">Voltar ao atendimento</a>')
-        except (OSError, sqlite3.Error): self._send(503, 'Armazenamento indisponível. Tente novamente.')
+        except (OSError, sqlite3.Error):
+            self._send(503, json.dumps({'error':'storage_unavailable','message':'Não foi possível confirmar o envio. Atualize a conversa antes de reenviar.'}) if self._wants_json() else 'Armazenamento indisponível. Tente novamente.')
 
 
 def make_product_server(host,port,root,password,*,secret_dir=None,catalog_path=None,admin_path=None,agent_url='http://agent:8081'):
