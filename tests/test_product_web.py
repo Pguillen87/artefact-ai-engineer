@@ -67,13 +67,53 @@ class ProductWebTests(unittest.TestCase):
         status, headers, body = self.request('GET','/')
         self.assertEqual(status,200)
         self.assertEqual(headers['Referrer-Policy'],'same-origin')
-        self.assertIn('multiple',body)
-        self.assertIn('class="advanced"',body)
-        self.assertNotIn('class="advanced" open',body)
+        self.assertIn('href="/?view=files"',body)
+        self.assertIn('href="/?view=settings"',body)
+        self.assertNotIn('id="datasets"',body)
+        self.assertNotIn('id="api-key"',body)
+        with patch.object(ProductHandler,'api',side_effect=AssertionError('Settings must not depend on the agent')):
+            files = self.request('GET','/?view=files')[2]
+            settings = self.request('GET','/?view=settings')[2]
+        self.assertIn('multiple',files)
+        self.assertNotIn('id="api-key"',files)
+        self.assertIn('id="api-key"',settings)
+        self.assertNotIn('id="datasets"',settings)
+        self.assertIn('class="advanced"',settings)
+        self.assertNotIn('class="advanced" open',settings)
+        self.assertLess(settings.index('action="/ai/test"'),settings.index('class="advanced"'))
         for removed in ('Importa\u00e7\u00e3o e vers\u00f5es', 'Cat\u00e1logo e revis\u00e3o', '<pre>', 'preserve_legacy', 'name="official"'):
-            self.assertNotIn(removed,body)
-        for path, target in [('/catalog','/#import'),('/ai','/#ai'),('/chat?id=abc','/?id=abc#chat')]:
+            self.assertNotIn(removed,body + files + settings)
+        for path, target in [('/catalog','/?view=files'),('/ai','/?view=settings'),('/chat?id=abc','/?view=chat&id=abc')]:
             self.assertEqual(self.request('GET',path)[1]['Location'],target)
+
+    def test_seller_validation_keeps_form_and_explains_the_problem(self):
+        self.login()
+        code, _, body = self.request('POST','/seller-contact',{'name':'Test Seller','contact':'bad'})
+        self.assertEqual(code,400)
+        self.assertIn('id="seller-phone"',body)
+        self.assertIn('value="Test Seller"',body)
+        self.assertIn('value="bad"',body)
+        self.assertIn('Telefone',body)
+        self.assertIn('aria-current="page">Configura',body)
+        code, _, body = self.request('POST','/seller-contact',{'name':'Test Seller','contact':'(00) 90000-0000'})
+        self.assertEqual(code,303)
+        self.assertEqual(self.server.admin.seller_contact(),'(00) 90000-0000')
+
+    def test_invalid_ai_settings_keep_nonsecret_fields(self):
+        self.login()
+        config = self.server.provider_config
+        models = config.models()['google']
+        config.save('google', models[0], 'synthetic-key')
+        code, _, body = self.request('POST','/ai/limits',{'provider':'google','max_calls':'57','max_usd':'-1','input_price':'2','output_price':'7'})
+        self.assertEqual(code,400)
+        for value in ('57','-1','2','7'):
+            self.assertIn('value="'+value+'"',body)
+        self.assertEqual(config.status()['providers']['google']['max_calls'],100)
+        secret = 'SENSITIVE-' + 'x' * 4096
+        code, _, body = self.request('POST','/ai/save',{'provider':'google','model':models[-1],'api_key':secret})
+        self.assertEqual(code,400)
+        self.assertIn('value="'+models[-1]+'" selected',body)
+        self.assertNotIn(secret,body)
 
     def multipart(self, files, csrf=None):
         boundary='artefact-test-boundary'
@@ -98,7 +138,7 @@ class ProductWebTests(unittest.TestCase):
             self.assertEqual(active,self.server.datasets.active_version())
         body, content_type=self.multipart(files,csrf='wrong')
         self.assertEqual(self.request('POST','/dataset/import',body=body,headers={'Content-Type':content_type})[0],403)
-        self.assertEqual(self.request('POST','/seller-contact',{'contact':'(67) 3341-4444'},headers={'Origin':'http://external.test'})[0],403)
+        self.assertEqual(self.request('POST','/seller-contact',{'contact':'(00) 90000-0000'},headers={'Origin':'http://external.test'})[0],403)
 
     def test_basic_ai_save_preserves_settings_and_never_calls_api(self):
         self.login(); config=self.server.provider_config; model=config.models()['google'][0]
@@ -109,8 +149,8 @@ class ProductWebTests(unittest.TestCase):
         state=config.status()['providers']['google']
         self.assertEqual((state['max_calls'],state['max_usd'],state['input_price'],state['output_price']),(57,'3','2','7'))
         self.assertEqual(config.credentials('google'),'test-key')
-        self.assertEqual(self.request('POST','/seller-contact',{'name':'Ana','contact':'(67) 3341-4444'})[0],303)
-        self.assertEqual(self.server.admin.seller_name(),'Ana')
+        self.assertEqual(self.request('POST','/seller-contact',{'name':'Test Seller','contact':'(00) 90000-0000'})[0],303)
+        self.assertEqual(self.server.admin.seller_name(),'Test Seller')
 
     def test_chat_callback_does_not_deadlock_and_errors_are_friendly(self):
         self.login()

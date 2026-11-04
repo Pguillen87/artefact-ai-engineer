@@ -14,6 +14,7 @@ import sqlite3
 import hmac
 import threading
 import time
+import re
 from http.cookies import SimpleCookie
 from .web_ui import CSS, JS
 from .web_security import same_origin
@@ -77,13 +78,23 @@ class ProductHandler(Handler):
         self.end_headers(); self.wfile.write(raw)
 
     def layout(self, body, *, login=False):
-        logout = '' if login else self.form('/logout', '', 'Sair')
+        query = parse_qs(urlsplit(self.path).query)
+        active = getattr(self, 'render_view', query.get('view', ['chat'])[0])
+        if login:
+            shell = '<main class="login-shell" id="main-content">' + body + '</main>'
+        else:
+            nav = ''.join('<a href="/?view=' + value + '"' + (' aria-current="page"' if value == active else '') + '>' + title + '</a>' for value, title in [('chat','Chat'),('files','Arquivos'),('settings','Configurações')])
+            ready = self.server.provider_config.status()
+            entry = ready['providers'].get(ready['active'], {})
+            online = bool(entry.get('has_key') and entry.get('verified'))
+            shell = ('<div class="app-shell"><aside class="sidebar"><a class="wordmark" href="/">Empório<span>da Música</span></a>'
+                     '<p class="sidebar-caption">Central de atendimento</p><nav aria-label="Navegação principal">' + nav + '</nav>'
+                     '<div class="sidebar-footer"><span class="connection ' + ('connected' if online else '') + '">' + ('IA conectada' if online else 'IA não configurada') + '</span>'
+                     + self.form('/logout', '', 'Sair') + '</div></aside><main id="main-content">' + body + '</main></div>')
         return ('<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">'
                 '<meta name="viewport" content="width=device-width,initial-scale=1">'
                 '<title>Empório da Música · Atendimento</title><style>' + CSS + '</style></head><body>'
-                '<header><div><small>ARTEFACT / EMPÓRIO DA MÚSICA</small><h1>Central de atendimento</h1>'
-                '<p>Uma boa conversa começa com a informação certa.</p></div>' + logout + '</header><main>'
-                + body + '</main><script src="/app.js" defer></script></body></html>')
+                '<a class="skip-link" href="#main-content">Ir para o conteúdo</a>' + shell + '<script src="/app.js" defer></script></body></html>')
 
     def form(self, action, content, label, *, attrs=''):
         return (f'<form method="post" action="{action}" {attrs}><input type="hidden" name="csrf" '
@@ -100,6 +111,10 @@ class ProductHandler(Handler):
     @staticmethod
     def friendly(error):
         code = str(error)
+        validations = {'Unsupported provider or model':'Escolha um provedor e um modelo da lista.', 'Invalid API key':'Informe uma chave API válida.', 'Positive finite limits and prices required':'Informe valores positivos nos limites e preços.', 'Test the selected provider and model before activation':'Salve uma chave API e teste a conexão antes de ativar.', 'Provider key missing':'Salve uma chave API antes de testar a conexão.'}
+        if code in validations: return validations[code]
+        if code.startswith('Contato inválido'): return 'Telefone inválido. Use DDD e um número válido.'
+        if code.startswith('Nome do vendedor inválido'): return 'Informe um nome de vendedor com até 100 caracteres, sem marcação.'
         return {'provider_missing': 'Configure e teste a IA antes de iniciar uma conversa.',
                 'dataset_missing': 'Importe os seis CSVs antes de conversar.',
                 'provider_unavailable': 'A IA desta conversa não está disponível. Confira a configuração.',
@@ -118,7 +133,7 @@ class ProductHandler(Handler):
             try: code=json.load(exc).get('error','agent_unavailable')
             except (ValueError,OSError):code='agent_unavailable'
             raise ValueError(str(code)) from None
-        except (URLError,OSError):raise ValueError('Agente indisponível. Confira o serviço Docker agent.') from None
+        except (URLError,OSError):raise ValueError('agent_unavailable') from None
 
     def refresh_admin(self):
         from .dataset_store import DatasetStore
@@ -128,42 +143,48 @@ class ProductHandler(Handler):
 
     def _settings(self, query):
         active = self.server.datasets.active_version()
+        view = query.get('view', ['settings'])[0]
+        body = '<div class="settings">'
+        body += '<section class="file-panel" id="import"><h2>Importar CSVs</h2><p class="muted">Selecione os seis arquivos da loja. A base atual só será substituída se todos forem válidos.</p>'
+        body += '<p class="hint">' + ('Base pronta para atendimento.' if active else 'Sem dataset ativo. Selecione os seis CSVs para começar.') + '</p>'
+        body += self.form('/dataset/import', '<label for="datasets">Arquivos CSV</label><input id="datasets" type="file" name="datasets" accept=".csv" multiple required>'
+                          '<ul id="file-list" class="file-list"></ul><p class="hint">Categories, customers, order_items, orders, products e promotions.</p>',
+                          'Importar CSVs', attrs='enctype="multipart/form-data"') + '</section>'
+        if view == 'files': return body + '</div>'
         state = self.server.provider_config.status()
         models = self.server.provider_config.models()
         selected = query.get('provider', [state['active'] or 'google'])[0]
         if selected not in models: selected = 'google'
         saved = state['providers'].get(selected, {})
-        body = '<aside class="settings" aria-label="Configurações do atendimento">'
-        body += '<details class="card" id="import" open><summary>Importar arquivos<small>Os dados que orientam o atendimento</small></summary>'
-        body += '<p class="hint">' + ('Base pronta para atendimento.' if active else 'Sem dataset ativo. Selecione os seis CSVs para começar.') + '</p>'
-        body += self.form('/dataset/import', '<label for="datasets">Arquivos CSV</label><input id="datasets" type="file" name="datasets" accept=".csv" multiple required>'
-                          '<ul id="file-list" class="file-list"></ul><p class="hint">Categories, customers, order_items, orders, products e promotions.</p>',
-                          'Importar CSVs', attrs='enctype="multipart/form-data"') + '</details>'
+        body = '<div class="settings-grid">'
         admin = self.server.admin
-        body += '<details class="card" id="seller" open><summary>Contato do vendedor<small>Para continuar a conversa com a loja</small></summary>'
-        body += self.form('/seller-contact', '<label for="seller-name">Nome do vendedor</label><input id="seller-name" name="name" maxlength="100" value="' + escape(admin.seller_name(), quote=True) + '">'
-                          '<label for="seller-phone">Telefone</label><input id="seller-phone" type="tel" name="contact" maxlength="16" required value="' + escape(admin.seller_contact(), quote=True) + '">', 'Salvar') + '</details>'
+        seller = '<section class="settings-section seller-section" id="seller"><h2>Vendedor</h2><p class="muted">O contato indicado nas respostas de encaminhamento.</p>'
+        seller += self.form('/seller-contact', '<label for="seller-name">Nome do vendedor</label><input id="seller-name" name="name" maxlength="100" value="' + escape(query.get('seller_name', [admin.seller_name()])[0], quote=True) + '">'
+                          '<label for="seller-phone">Telefone</label><input id="seller-phone" type="tel" name="contact" placeholder="(DD) 9XXXX-XXXX" maxlength="24" required value="' + escape(query.get('seller_phone', [admin.seller_contact()])[0], quote=True) + '">', 'Salvar vendedor') + '</section>'
         providers = ''.join(f'<option value="{name}"' + (' selected' if name == selected else '') + f'>{label}</option>' for name, label in [('google', 'Google Gemini'), ('openai', 'OpenAI')])
-        options = ''.join('<option value="' + escape(model, quote=True) + '"' + (' selected' if model == saved.get('model') else '') + '>' + escape(model) + '</option>' for model in models[selected])
+        selected_model = query.get('model', [saved.get('model')])[0]
+        options = ''.join('<option value="' + escape(model, quote=True) + '"' + (' selected' if model == selected_model else '') + '>' + escape(model) + '</option>' for model in models[selected])
         fields = '<label for="provider">Provedor</label><select id="provider" name="provider">' + providers + '</select><label for="model">Modelo</label><select id="model" name="model">' + options + '</select>'
         fields += '<label for="api-key">Chave API</label><input id="api-key" name="api_key" type="password" autocomplete="new-password" placeholder="' + ('Chave salva — deixe vazio para manter' if saved.get('has_key') else 'Informe sua chave API') + '">'
-        body += '<details class="card" id="ai" open><summary>Configuração de IA<small>Escolha quem responde às mensagens</small></summary>'
-        body += self.form('/ai/save', fields, 'Salvar')
-        body += '<p class="hint">' + ('IA pronta para atendimento.' if state['active'] == selected and saved.get('verified') else 'Após salvar, abra Avançado para testar e ativar.') + '</p>'
+        body += '<section class="settings-section ai-section" id="ai"><h2>Inteligência artificial</h2><p class="muted">Escolha o provedor, salve sua chave e teste a conexão.</p>'
+        body += self.form('/ai/save', fields, 'Salvar configuração')
+        body += '<p class="hint">' + ('IA pronta para atendimento.' if state['active'] == selected and saved.get('verified') else ('Configuração salva. Teste a conexão para habilitar o atendimento.' if saved.get('has_key') else 'Informe e salve uma chave API para habilitar o atendimento.')) + '</p>'
         advanced = '<input type="hidden" name="provider" value="' + selected + '"><div class="advanced-grid">'
         for name, title, default in [('max_calls', 'Limite de chamadas', '100'), ('max_usd', 'Orçamento (USD)', '1'), ('input_price', 'USD / milhão de tokens de entrada', '1'), ('output_price', 'USD / milhão de tokens de saída', '5')]:
-            advanced += f'<div><label for="{name}">{title}</label><input id="{name}" name="{name}" type="number" min="' + ('1' if name == 'max_calls' else '0.000001') + '" step="' + ('1' if name == 'max_calls' else 'any') + '" required value="' + escape(str(saved.get(name, default)), quote=True) + '"></div>'
-        body += '<details class="advanced"><summary>Avançado</summary>' + self.form('/ai/limits', advanced + '</div>', 'Salvar limites')
-        body += '<p class="hint">Os limites permanecem ativos. O custo é estimado pelos preços informados.</p>'
-        body += self.form('/ai/test', '<input type="hidden" name="provider" value="' + selected + '">', 'Testar e ativar')
-        body += '<p class="hint">O teste faz uma pequena chamada real à API.</p></details></details></aside>'
+            advanced += f'<div><label for="{name}">{title}</label><input id="{name}" name="{name}" type="number" min="' + ('1' if name == 'max_calls' else '0.000001') + '" step="' + ('1' if name == 'max_calls' else 'any') + '" required value="' + escape(str(query.get(name, [saved.get(name, default)])[0]), quote=True) + '"></div>'
+        test_content = '<input type="hidden" name="provider" value="' + selected + '">'
+        test_form = self.form('/ai/test', test_content, 'Testar e ativar')
+        if not saved.get('has_key'): test_form = test_form.replace('<button>', '<button disabled>')
+        body += '<div class="connection-action">' + test_form + '<p class="hint">O teste usa a chave salva e faz uma pequena chamada à API.</p></div>'
+        body += '<details class="advanced"><summary>Avançado: limites de uso</summary>' + self.form('/ai/limits', advanced + '</div>', 'Salvar limites')
+        body += '<p class="hint">Os limites ficam ativos mesmo com esta seção fechada. O custo é uma estimativa.</p></details></section>' + seller + '</div>'
         return body
 
     def _chat(self, query):
         state = self.server.provider_config.status()
         provider = state['providers'].get(state['active'], {})
         ready = self.server.datasets.active_version() is not None and provider.get('has_key') and provider.get('verified')
-        body = '<section class="card chat" id="chat"><div class="chat-top"><div><h2>Converse com o Empório</h2><p class="muted">Produtos, pedidos e dúvidas sobre a loja.</p></div>'
+        body = '<section class="card chat" id="chat"><div class="chat-top"><div><h2>Conversa com o cliente</h2><p class="muted">Respostas com os dados e as políticas da loja.</p></div>'
         if ready: body += self.form('/chat/create', '', 'Nova conversa')
         body += '</div>'
         sessions = []; session = None; error = ''; missing_session = False
@@ -186,7 +207,7 @@ class ProductHandler(Handler):
             user = message['role'] == 'user'
             body += '<article class="bubble ' + ('user' if user else 'assistant') + '"><div class="role">' + ('Você' if user else 'Empório da Música') + '</div><div class="text">' + escape(message.get('content', message.get('text', ''))) + '</div></article>'
         if not messages:
-            body += '<div class="empty"><span class="mark" aria-hidden="true">♫</span><h3>Como podemos ajudar?</h3><p class="muted">Pergunte sobre um instrumento, acompanhe um pedido ou tire uma dúvida sobre a loja.</p></div>'
+            body += '<div class="empty"><h3>Pronto para a próxima conversa</h3><p class="muted">Pergunte sobre um instrumento, acompanhe um pedido ou tire uma dúvida sobre a loja.</p></div>'
         body += '</div>'
         if error: body += '<p class="notice error chat-error" role="alert">' + escape(error) + '</p>'
         if ready:
@@ -194,9 +215,25 @@ class ProductHandler(Handler):
             body += '<div class="composer">' + self.form('/chat/send', '<input type="hidden" name="id" value="' + escape(sid, quote=True) + '"><label for="message">Sua mensagem</label><textarea id="message" name="message" rows="2" maxlength="2000" required placeholder="Escreva sua mensagem…">' + escape(query.get('draft', [''])[0]) + '</textarea>', 'Enviar')
             body += '<p class="hint">Enter para enviar · Shift+Enter para uma nova linha</p></div>'
         else:
-            body += '<div class="composer"><p class="hint">' + ('Importe os seis CSVs para começar.' if self.server.datasets.active_version() is None else 'Salve a configuração de IA e use Testar e ativar em Avançado.') + '</p></div>'
+            pending_files = self.server.datasets.active_version() is None
+            body += '<div class="setup-needed"><div><strong>' + ('Importe os dados da loja' if pending_files else 'Conecte a inteligência artificial') + '</strong><p>' + ('A conversa precisa dos seis CSVs para consultar produtos e pedidos.' if pending_files else 'Escolha o provedor, salve sua chave e teste a conexão nas configurações.') + '</p></div><a class="button-link" href="/?view=' + ('files' if pending_files else 'settings') + '">' + ('Importar arquivos' if pending_files else 'Configurar IA') + '</a></div><div class="composer"><label for="message">Sua mensagem</label><textarea id="message" disabled rows="2" placeholder="Aguardando a configuração do atendimento"></textarea><button disabled>Enviar</button></div>'
         body += '<p id="operation-status" role="status" aria-live="polite"></p></section>'
         return body
+
+    def _render(self, query, *, error='', notice=''):
+        view = query.get('view', ['chat'])[0]
+        if view not in ('chat', 'files', 'settings'): view = 'chat'
+        self.render_view = view
+        query = {**query, 'view':[view]}
+        headings = {'chat':('Chat de atendimento','Converse com seus clientes em um só lugar.'),
+                    'files':('Arquivos da loja','Uma única importação para preparar a base de atendimento.'),
+                    'settings':('Configurações','O contato da loja e a IA que responde aos clientes.')}
+        title, description = headings[view]
+        body = '<div class="page-heading"><div><h1>' + title + '</h1><p>' + description + '</p></div></div>'
+        if notice: body += '<p class="notice" role="status">' + escape(notice) + '</p>'
+        if error: body += '<p class="notice error" role="alert">' + escape(error) + '</p>'
+        body += self._chat(query) if view == 'chat' else self._settings(query)
+        return self.layout(body)
 
     def _get(self):
         if not self._host(): self._send(400, 'Endereço inválido.'); return
@@ -209,16 +246,13 @@ class ProductHandler(Handler):
         if not self._guard(): return
         query = parse_qs(route.query)
         if route.path in {'/catalog', '/batch', '/ai', '/chat'}:
-            section = {'/catalog': 'import', '/batch': 'import', '/ai': 'ai', '/chat': 'chat'}[route.path]
-            self._send(303, '', {'Location': '/' + ('?' + urlencode({k:v[0] for k,v in query.items() if k in ('provider','id')}) if query else '') + '#' + section}); return
+            view = {'/catalog':'files','/batch':'files','/ai':'settings','/chat':'chat'}[route.path]
+            params = {k:v[0] for k,v in query.items() if k in ('provider','id')}
+            self._send(303, '', {'Location': '/?' + urlencode({'view':view, **params})}); return
         if route.path != '/': self._send(404, 'Página não encontrada.'); return
         try:
-            body = ''
-            notices = {'imported': 'Arquivos importados. A base está pronta.', 'saved': 'Configuração salva.', 'activated': 'IA testada e ativada.'}
-            if query.get('notice', [''])[0] in notices:
-                body += '<p class="notice" role="status">' + notices[query['notice'][0]] + '</p>'
-            body += '<div class="workspace">' + self._settings(query) + self._chat(query) + '</div>'
-            self._send(200, self.layout(body))
+            notices = {'imported':'Arquivos importados. A base está pronta.', 'saved':'Configuração salva.', 'seller':'Contato do vendedor salvo.', 'activated':'Conexão testada. A IA está pronta para o atendimento.'}
+            self._send(200, self._render(query, notice=notices.get(query.get('notice',[''])[0], '')))
         except (ValueError, sqlite3.Error, OSError): self._send(503, '<p class="notice error">Não foi possível carregar o atendimento. Tente novamente.</p>')
 
     def _read_form(self):
@@ -265,52 +299,54 @@ class ProductHandler(Handler):
             if self.path == '/logout':
                 with self.server.auth_lock: self.server.login_sessions.pop(self._session_token(), None)
                 self._send(303, '', {'Location': '/login', 'Set-Cookie': 'artefact_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0'}); return
-            location = '/?notice=saved'
+            location = '/?view=settings&notice=saved'
             if self.path == '/dataset/import':
                 self.server.datasets.import_files(files, preserve_legacy=self.server.datasets.active_version() is None)
-                self.refresh_admin(); location = '/?notice=imported#import'
+                self.refresh_admin(); location = '/?view=files&notice=imported'
             elif self.path == '/dataset/activate': self.server.datasets.activate(int(fields['version']))
             elif self.path == '/seller-contact':
-                self.refresh_admin(); self.server.admin.set_seller(fields.get('name', self.server.admin.seller_name()), fields['contact'])
+                self.refresh_admin()
+                phone = fields['contact'].strip()
+                if re.fullmatch(r'[+()0-9 \-]+', phone):
+                    digits = re.sub(r'[^0-9]', '', phone)
+                    if digits.startswith('55') and len(digits) in (12,13): digits = digits[2:]
+                    if len(digits) in (10,11): phone = '(' + digits[:2] + ') ' + digits[2:-4] + '-' + digits[-4:]
+                self.server.admin.set_seller(fields.get('name', self.server.admin.seller_name()), phone); location = '/?view=settings&notice=seller'
             elif self.path == '/ai/save':
                 provider = fields['provider']
                 self.server.provider_config.save_partial(provider, fields['model'], fields.get('api_key') or None)
-                location += '&provider=' + provider + '#ai'
+                location += '&provider=' + provider
             elif self.path == '/ai/limits':
                 provider = fields['provider']; saved = self.server.provider_config.status()['providers'].get(provider)
                 if not saved: raise ValueError('Salve primeiro o provedor, modelo e chave API.')
                 self.server.provider_config.save_partial(provider, saved['model'], **{k:fields[k] for k in ('max_calls','max_usd','input_price','output_price')})
-                location += '&provider=' + provider + '#ai'
+                location += '&provider=' + provider
             elif self.path in ('/ai/test', '/ai/activate'):
                 provider = fields['provider']
                 if self.path == '/ai/test': self.api('POST', '/provider-test', {'provider': provider})
-                self.server.provider_config.activate(provider); location = '/?notice=activated&provider=' + provider + '#ai'
+                self.server.provider_config.activate(provider); location = '/?view=settings&notice=activated&provider=' + provider
             elif self.path == '/ai/remove': self.server.provider_config.remove_key(fields['provider'])
             elif self.path == '/chat/create':
-                result = self.api('POST', '/sessions', {}); location = '/?id=' + result['id'] + '#chat'
+                result = self.api('POST', '/sessions', {}); location = '/?id=' + result['id']
             elif self.path == '/chat/send':
                 sid = fields.get('id')
                 if not sid: sid = self.api('POST', '/sessions', {})['id']
                 self.api('POST', '/sessions/' + sid + '/messages', {'message': fields['message']})
-                location = '/?id=' + sid + '#chat'
+                location = '/?id=' + sid
             elif self.path == '/chat/delete': self.api('DELETE', '/sessions/' + fields['id']); location = '/#chat'
             else: self._send(404, 'Ação não encontrada.'); return
             self._send(303, '', {'Location': location})
-        except StructuralError as exc:
-            description = str(exc)
-            for original, translated in [('invalid header', 'cabeçalho inválido'), ('malformed row', 'linha malformada'), ('invalid typed field or duplicate key', 'campo inválido ou identificador duplicado'), ('invalid encoding or CSV', 'codificação ou CSV inválido'), ('missing reference to', 'referência ausente em'), ('source hash mismatch', 'conteúdo diferente do arquivo oficial')]:
-                description = description.replace(original, translated)
-            self._send(400, '<p class="notice error" role="alert">' + escape(description) + '</p><a href="/">Voltar ao atendimento</a>')
-        except (ValueError, KeyError, TypeError, UnicodeError) as exc:
-            error = '<p class="notice error" role="alert">' + escape(self.friendly(exc)) + '</p>'
-            if self.path == '/chat/send':
-                query = {'id': [sid or fields.get('id', '')], 'draft': [fields.get('message', '')]}
-                try:
-                    self._send(400, self.layout(error + '<div class="workspace">' + self._settings(query) + self._chat(query) + '</div>'))
-                except (ValueError, OSError, sqlite3.Error):
-                    self._send(503, error + '<a href="/">Voltar ao atendimento</a>')
-            else:
-                self._send(400, error + '<a href="/">Voltar ao atendimento</a>')
+        except (StructuralError, ValueError, KeyError, TypeError, UnicodeError) as exc:
+            message = self.friendly(exc)
+            if isinstance(exc, StructuralError):
+                message = str(exc)
+                for old, new in [('invalid header','cabeçalho inválido'),('malformed row','linha malformada'),('invalid typed field or duplicate key','campo inválido ou identificador duplicado'),('invalid encoding or CSV','codificação ou CSV inválido'),('missing reference to','referência ausente em')]: message = message.replace(old,new)
+            view = 'files' if self.path.startswith('/dataset/') else ('chat' if self.path.startswith('/chat/') else 'settings')
+            query = {'view':[view], 'id':[sid or fields.get('id','')], 'draft':[fields.get('message','')],
+                     'provider':[fields.get('provider','google')], 'seller_name':[fields.get('name',self.server.admin.seller_name())], 'seller_phone':[fields.get('contact',self.server.admin.seller_contact())]}
+            query.update({key:[fields[key]] for key in ('model','max_calls','max_usd','input_price','output_price') if key in fields})
+            try: self._send(400, self._render(query, error=message))
+            except (ValueError, OSError, sqlite3.Error): self._send(503, '<p class="notice error">' + escape(message) + '</p><a href="/">Voltar ao atendimento</a>')
         except (OSError, sqlite3.Error): self._send(503, 'Armazenamento indisponível. Tente novamente.')
 
 
