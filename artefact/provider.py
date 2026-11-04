@@ -200,3 +200,71 @@ class GeminiProvider:
             raise
         self.last_usage = self._usage(response)
         return {'output': self._function_calls(response), 'usage': dict(self.last_usage)}
+
+class ProviderError(RuntimeError):
+    """Sanitized upstream failure, never containing the provider response or key."""
+    def __init__(self, category='provider_failed'):
+        self.category = category
+        super().__init__(category)
+
+class _ConfiguredProvider:
+    def __init__(self, inner, state, google):
+        self.inner, self.state, self.google = inner, state, google
+
+    def request(self, messages, final=False):
+        from .state import BudgetExhausted
+        try:
+            result = self.inner.request(messages, final=final)
+        except BudgetExhausted:
+            raise
+        except Exception as exc:
+            status = (getattr(exc, 'code', None) or getattr(exc, 'status_code', None)
+                      or getattr(getattr(exc, 'response', None), 'status_code', None))
+            category = {401:'provider_authentication', 403:'provider_authentication',
+                        429:'provider_rate_limit', 408:'provider_timeout', 504:'provider_timeout',
+                        500:'provider_unavailable', 502:'provider_unavailable', 503:'provider_unavailable'}.get(status)
+            if isinstance(exc, TimeoutError): category = 'provider_timeout'
+            raise ProviderError(category or getattr(self.inner, 'last_failure', None) or 'provider_failed') from None
+        if not isinstance(result, dict) or not isinstance(result.get('output'), list):
+            raise ProviderError('provider_invalid_response')
+        usage = result.get('usage', {})
+        if not isinstance(usage, dict) or any(type(usage[k]) is not int or usage[k] < 0 for k in ('input_tokens', 'output_tokens', 'thought_tokens', 'total_tokens') if k in usage):
+            raise ProviderError('provider_invalid_response')
+        if self.google:
+            usage = result.get('usage', {})
+            input_tokens = usage.get('input_tokens')
+            output_tokens = usage.get('output_tokens')
+            if type(input_tokens) is int and type(output_tokens) is int and input_tokens >= 0 and output_tokens >= 0:
+                # Gemini's thought tokens are billed output tokens, when reported.
+                thoughts = usage.get('thought_tokens', 0)
+                self.state.record_tokens(input_tokens, output_tokens + (thoughts if type(thoughts) is int and thoughts >= 0 else 0))
+        return result
+
+def make_provider(config, provider, model, state, *, client=None, transport=None):
+    """Build the explicitly selected adapter. This function performs no network call."""
+    if model not in config.models().get(provider, ()):
+        raise ValueError('Unsupported provider or model')
+    settings = config.status()['providers'].get(provider)
+    if not settings:
+        raise ValueError('Provider configuration missing')
+    key = config.credentials(provider)
+    max_usd = Decimal(settings['max_usd'])
+    input_price = Decimal(settings['input_price'])
+    output_price = Decimal(settings['output_price'])
+    max_calls = settings['max_calls']
+    if provider == 'google':
+        def reserve(_model, size, output):
+            estimate = (Decimal(size + 4096) * input_price + Decimal(output) * output_price) / Decimal(1_000_000)
+            state.reserve(estimate, max_usd, max_calls)
+        inner = GeminiProvider(key, model, client=client, before_request=reserve)
+    else:
+        inner = ResponsesProvider(key, model, state, max_usd, max_calls, input_price, output_price, transport=transport)
+    return _ConfiguredProvider(inner, state, provider == 'google')
+
+def test_connection(config, provider, model, state, *, explicit=False, client=None, transport=None):
+    """Perform a billable test only when an administrator explicitly requests it."""
+    if explicit is not True:
+        raise ValueError('Explicit connection test required')
+    adapter = make_provider(config, provider, model, state, client=client, transport=transport)
+    adapter.request([{'role': 'user', 'content': 'Teste de conexão.'}], final=True)
+    return {'ok': True, 'provider': provider, 'model': model}

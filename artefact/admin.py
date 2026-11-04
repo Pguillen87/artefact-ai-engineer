@@ -126,12 +126,15 @@ def require_explicit_initialization(admin_path, serving_path, initialize):
 
 
 class CatalogAdmin:
-    def __init__(self, admin_path, serving_path, baseline):
+    def __init__(self, admin_path, serving_path, baseline, *, dataset_store=None):
         self.admin_path = Path(admin_path).resolve()
         self.serving_path = Path(serving_path).resolve()
         self.baseline = baseline
+        self.dataset_store = dataset_store
+        if dataset_store is not None and Path(dataset_store.path).resolve() != self.serving_path:
+            raise ValueError('Dataset e catálogo devem compartilhar o banco publicado')
         if self.admin_path == self.serving_path: raise ValueError('Bancos devem ser separados')
-        if self.admin_path.exists() != self.serving_path.exists(): raise ValueError('Um dos bancos persistentes está ausente')
+        if self.admin_path.exists() != self.serving_path.exists() and not (dataset_store is not None and not self.admin_path.exists() and self.serving_path.exists()): raise ValueError('Um dos bancos persistentes está ausente')
         existing = self.admin_path.exists()
         if existing:
             _recover_existing(self.admin_path, self.serving_path)
@@ -161,6 +164,28 @@ class CatalogAdmin:
             con.execute('CREATE TABLE IF NOT EXISTS active (id INTEGER PRIMARY KEY CHECK(id=1), version_id INTEGER NOT NULL REFERENCES versions(id))')
             con.execute('INSERT OR IGNORE INTO versions(id,products) VALUES(0,?)', (_encode_products([]),))
             con.execute('INSERT OR IGNORE INTO active(id,version_id) VALUES(1,0)')
+            if dataset_store is not None:
+                con.execute('CREATE TABLE IF NOT EXISTS dataset_incremental_versions (version_id INTEGER PRIMARY KEY REFERENCES versions(id), dataset_version INTEGER NOT NULL REFERENCES dataset_versions(id), base_version INTEGER NOT NULL REFERENCES dataset_versions(id))')
+                current=con.execute('SELECT version_id FROM dataset_active WHERE id=1').fetchone()
+                if current is None or current[0] != baseline.catalog_version: raise ValueError('Dataset ativo mudou')
+                mapping=con.execute('SELECT m.dataset_version,m.base_version FROM active a LEFT JOIN dataset_incremental_versions m ON m.version_id=a.version_id WHERE a.id=1').fetchone()
+                if mapping[0] is None:
+                    active,old_products=con.execute('SELECT a.version_id,v.products FROM active a JOIN versions v ON v.id=a.version_id WHERE a.id=1').fetchone()
+                    if _parse('products',old_products):
+                        active=con.execute('INSERT INTO versions(products) VALUES(?)',(_encode_products([]),)).lastrowid
+                        con.execute('UPDATE active SET version_id=? WHERE id=1',(active,))
+                    con.execute('INSERT INTO dataset_incremental_versions VALUES(?,?,?)',(active,current[0],current[0]))
+                elif mapping[0] != current[0]:
+                    previous=con.execute('SELECT version_id,base_version FROM dataset_incremental_versions WHERE dataset_version=? ORDER BY version_id DESC LIMIT 1',(current[0],)).fetchone()
+                    if previous:
+                        con.execute('UPDATE active SET version_id=? WHERE id=1',(previous[0],))
+                        self.baseline = dataset_store.load(previous[1])
+                    else:
+                        version=con.execute('INSERT INTO versions(products) VALUES(?)',(_encode_products([]),)).lastrowid
+                        con.execute('INSERT INTO dataset_incremental_versions VALUES(?,?,?)',(version,current[0],current[0]))
+                        con.execute('UPDATE active SET version_id=? WHERE id=1',(version,))
+                else:
+                    self.baseline = dataset_store.load(mapping[1])
 
     def create_review(self, product_id, field, reason, catalog_version):
         allowed={'brand','category_id','specs.keys','specs.strings'}
@@ -169,10 +194,22 @@ class CatalogAdmin:
         con=self._transaction()
         try:
             row=con.execute('SELECT v.id,v.products FROM active a JOIN versions v ON v.id=a.version_id WHERE a.id=1').fetchone()
-            if row is None or row[0] != catalog_version: raise ValueError('Versão do catálogo mudou')
-            products=list(self.baseline.tables['products']) + _parse('products',row[1])
+            if row is None: raise ValueError('Versão do catálogo mudou')
+            if self.dataset_store is not None:
+                current=con.execute('SELECT version_id FROM dataset_active WHERE id=1').fetchone()
+                if not current or current[0] != catalog_version: raise ValueError('Versão do catálogo mudou')
+                rows=con.execute('SELECT name,content,digest FROM dataset_files WHERE version_id=?',(catalog_version,)).fetchall()
+                if len(rows) != len(SCHEMAS) or any(not isinstance(raw,bytes) or hashlib.sha256(raw).hexdigest()!=digest for _,raw,digest in rows):
+                    raise ValueError('Integridade do dataset comprometida')
+                from .dataset_store import _snapshot
+                snapshot=_snapshot({name:raw for name,raw,_ in rows},catalog_version)
+                products=snapshot.tables['products']; categories=snapshot.tables['categories']
+            else:
+                if row[0] != catalog_version: raise ValueError('Versão do catálogo mudou')
+                products=list(self.baseline.tables['products']) + _parse('products',row[1])
+                categories=self.baseline.tables['categories']
             if not any(p['product_id']==product_id for p in products): raise ValueError('Produto inexistente')
-            if not any(i.product_id==product_id and i.field==field for i in _scan(products,self.baseline.tables['categories'])):
+            if not any(i.product_id==product_id and i.field==field for i in _scan(products,categories)):
                 raise ValueError('Campo sem conflito registrado')
             existing=con.execute("SELECT id FROM admin.technical_reviews WHERE product_id=? AND field=? AND catalog_version=? AND status='open' ORDER BY id LIMIT 1",(product_id,field,catalog_version)).fetchone()
             if existing:
@@ -298,6 +335,16 @@ class CatalogAdmin:
             existing=_parse('products',old[0])
             added=_validate(row[0],self.baseline,existing)
             version=con.execute('INSERT INTO versions(products) VALUES(?)',(_encode_products(existing+added),)).lastrowid
+            if self.dataset_store is not None:
+                from .dataset_store import _encode, _snapshot
+                mapping=con.execute('SELECT m.dataset_version,m.base_version FROM active a JOIN dataset_incremental_versions m ON m.version_id=a.version_id WHERE a.id=1').fetchone()
+                current=con.execute('SELECT version_id FROM dataset_active WHERE id=1').fetchone()
+                if not mapping or not current or mapping[0] != current[0] or mapping[1] != self.baseline.catalog_version: raise ValueError('Dataset ativo mudou; recarregue o catálogo')
+                tables=dict(self.baseline.tables); tables['products']=tuple(self.baseline.tables['products'])+tuple(existing+added)
+                files={name:_encode(name,rows) for name,rows in tables.items()}
+                _snapshot(files)
+                dataset_version=self.dataset_store._publish(con,files)
+                con.execute('INSERT INTO dataset_incremental_versions VALUES(?,?,?)',(version,dataset_version,mapping[1]))
             con.execute('UPDATE active SET version_id=? WHERE id=1',(version,))
             con.execute("UPDATE admin.batches SET status='published' WHERE id=?",(batch,))
             con.execute("INSERT INTO admin.events(action,batch_id,version_id) VALUES('publish',?,?)",(batch,version))
@@ -317,6 +364,12 @@ class CatalogAdmin:
         con=self._transaction()
         try:
             if not con.execute('SELECT 1 FROM versions WHERE id=?',(version,)).fetchone(): raise ValueError('Versão inexistente')
+            if self.dataset_store is not None:
+                active=con.execute('SELECT m.dataset_version,m.base_version,d.version_id FROM active a JOIN dataset_incremental_versions m ON m.version_id=a.version_id JOIN dataset_active d ON d.id=1 WHERE a.id=1').fetchone()
+                if not active or active[0] != active[2] or active[1] != self.baseline.catalog_version: raise ValueError('Dataset ativo mudou; recarregue o catálogo')
+                mapping=con.execute('SELECT dataset_version,base_version FROM dataset_incremental_versions WHERE version_id=?',(version,)).fetchone()
+                if not mapping: raise ValueError('Versão não vinculada a dataset')
+                con.execute('UPDATE dataset_active SET version_id=? WHERE id=1',(mapping[0],))
             con.execute('UPDATE active SET version_id=? WHERE id=1',(version,))
             con.execute("INSERT INTO admin.events(action,version_id,reason) VALUES('activate',?,?)",(version,reason.strip()))
             con.commit()
