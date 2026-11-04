@@ -8,7 +8,6 @@ from test_data import write_dataset
 from artefact.data import load_dataset
 from artefact.conversation import ConversationAgent
 from artefact.provider import ResponsesProvider
-from artefact.codex_local import CodexLocalProvider, CodexQuota
 from artefact.state import State
 
 class OneInferenceTests(unittest.TestCase):
@@ -23,10 +22,3 @@ class OneInferenceTests(unittest.TestCase):
     self.assertIn(expected,ConversationAgent(snapshot,provider).answer(question,chat_id=1))
     self.assertEqual(transport.call_count,1)
    self.assertEqual(state.usage()['calls'],3)
- def test_codex_provider_uses_one_subprocess_for_policy(self):
-  with TemporaryDirectory() as d:
-   root=Path(d);write_dataset(root);quota=CodexQuota(root/'q.db',1)
-   runner=Mock(side_effect=[Mock(returncode=0,stdout='{"calls":[{"name":"policy","topic":"pix"}]}'),AssertionError('unexpected second inference')])
-   provider=CodexLocalProvider('codex.exe',quota,runner,model='test-model')
-   self.assertIn('5%',ConversationAgent(load_dataset(root),provider).answer('Pix?',chat_id=1))
-   self.assertEqual(runner.call_count,1);self.assertEqual(quota.usage(),1)

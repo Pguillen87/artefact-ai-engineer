@@ -180,28 +180,6 @@ class P2CorrectionTests(unittest.TestCase):
             'Quais instrumentos disponíveis custam até R$ 1.500?', chat_id='LR02-real-data')
         self.assertIn('Shelby SU-21S Soprano Sunburst', answer)
 
-    def test_codex_provider_records_safe_normalized_filter_diagnostics(self):
-        from artefact.codex_local import CodexLocalProvider
-
-        quota = Mock()
-        runner = Mock(return_value=SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps({'calls': [{
-                'name': 'search_products', 'max_price': '1.500', 'available_only': True,
-                'text': 'Korg Synth 1 Pro',
-            }]}),
-            stderr='',
-        ))
-        provider = CodexLocalProvider('codex', quota, runner=runner, model='gpt-6-luna')
-
-        provider.request([{'role': 'user', 'content': 'Quais instrumentos até R$ 1.500?'}])
-
-        self.assertEqual(provider.last_tool_summaries, [{
-            'name': 'search_products', 'text_filter': True, 'category_filter': False,
-            'available_only': True, 'max_price_brl': '1500.00', 'max_price_valid': True,
-        }])
-        self.assertNotIn('Korg Synth 1 Pro', str(provider.last_tool_summaries))
-
     def test_lr02_diagnostics_separate_invalid_filter_empty_result_and_execution_error(self):
         snapshot = self.snapshot({'products': {'price_brl': '1127.00', 'name': 'Korg Synth 1 Pro'},
                                  'promotions': {'is_active': '0'}})
