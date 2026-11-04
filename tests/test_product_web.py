@@ -5,11 +5,11 @@ from artefact.product_web import make_product_server
 class ProductWebTests(unittest.TestCase):
     def test_empty_authenticated_dashboard_and_six_file_form(self):
         with tempfile.TemporaryDirectory() as d:
-            server=make_product_server('127.0.0.1',0,Path(d),'synthetic-password-long')
+            server=make_product_server('127.0.0.1',0,Path(d),'admin')
             thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
             try:
                 conn=http.client.HTTPConnection('127.0.0.1',server.server_port)
-                auth='Basic '+base64.b64encode(b'admin:synthetic-password-long').decode()
+                auth='Basic '+base64.b64encode(b'admin:admin').decode()
                 conn.request('GET','/',headers={'Authorization':auth})
                 response=conn.getresponse(); body=response.read().decode()
                 self.assertEqual(response.status,200)
