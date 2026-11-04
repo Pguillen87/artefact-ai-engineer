@@ -10,6 +10,7 @@ from test_data import ROWS, write_dataset
 from artefact.conversation import ConversationAgent
 from artefact.data import load_dataset
 from artefact.services import Catalog
+from baseline_support import load_original_baseline
 
 
 class EffectiveBudgetTests(unittest.TestCase):
@@ -75,9 +76,7 @@ class EffectiveBudgetTests(unittest.TestCase):
         self.assertEqual([item['product_id'] for item in results],[2,3])
 
     def test_original_snapshot_promotional_item_qualifies_for_budget(self):
-        root = Path(r'C:\App\Artefact\Desafio Técnico AI Engineer 2026\data')
-        if not root.exists(): self.skipTest('local original baseline unavailable')
-        snapshot = load_dataset(root,verify_baseline=True)
+        snapshot = load_original_baseline(self)
         product = Catalog(snapshot).product(121)
         results = Catalog(snapshot).search(text=product['name'],max_price=Decimal('500'),available_only=True)
         self.assertEqual([item['product_id'] for item in results],[121])

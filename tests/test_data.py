@@ -6,6 +6,11 @@ import unittest
 from decimal import Decimal
 
 from artefact.data import load_dataset, StructuralError
+from baseline_support import (
+ assert_baseline_unchanged,
+ baseline_sha256,
+ resolve_original_baseline_dir,
+)
 
 HEADERS = {
  'categories': ['category_id','name','description'],
@@ -67,9 +72,8 @@ class DataTests(unittest.TestCase):
    root=Path(d);write_dataset(root);(root/'orders.csv').write_text('bad,header\n1,2\n')
    with self.assertRaises(StructuralError): load_dataset(root)
  def test_real_baseline(self):
-  root=Path(r'C:\App\Artefact\Desafio Técnico AI Engineer 2026\data')
-  if not root.exists(): self.skipTest('local private baseline unavailable')
-  before={p.name:p.read_bytes() for p in root.glob('*.csv')}
+  root=resolve_original_baseline_dir(self)
+  before=baseline_sha256(root)
   snapshot=load_dataset(root, verify_baseline=True)
   product=next(p for p in snapshot.tables['products'] if p['product_id']==142)
   self.assertEqual(product['price_brl'],Decimal('1127'))
@@ -117,7 +121,7 @@ class DataTests(unittest.TestCase):
   self.assertIn('não acumula',answer.lower())
   self.assertNotIn('R$ 306,95',answer)
   self.assertEqual(provider.request.call_count,1)
-  self.assertEqual(before,{p.name:p.read_bytes() for p in root.glob('*.csv')})
+  assert_baseline_unchanged(self,before,root)
 
 class AdditionalDataTests(unittest.TestCase):
  def test_wrong_category_and_no_false_brand_for_multiple_mentions(self):

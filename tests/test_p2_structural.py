@@ -11,8 +11,8 @@ from artefact.agent import Agent
 from artefact.conversation import ConversationAgent
 from artefact.context import resolve_commercial_basis
 from artefact.rendering import render_results
-from artefact.data import load_dataset
 from artefact.agent import WRITE_ISOLATION
+from baseline_support import load_original_baseline
 
 
 class StructuralCommercialTests(unittest.TestCase):
@@ -158,7 +158,7 @@ class StructuralCommercialTests(unittest.TestCase):
         self.assertNotIn('parcelamento permitido', agent.answer('E em 3x?', chat_id='ambiguous').lower())
 
     def test_real_baseline_partial_names_and_price_authority(self):
-        self.snapshot = load_dataset(Path(r'C:\App\Artefact\Desafio Técnico AI Engineer 2026\data'), verify_baseline=True)
+        self.snapshot = load_original_baseline(self)
         for route in (False, True):
             for plan in self.plans('1127.00'):
                 answer, _ = self.run_plan('Quanto fica o Korg Synth 1 Pro em 3x?', plan, route)

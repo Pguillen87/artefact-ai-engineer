@@ -5,7 +5,7 @@ from tempfile import TemporaryDirectory
 import test_p2_corrections as fixtures
 from artefact.agent import Agent
 from artefact.conversation import ConversationAgent, _confirms_catalog_price
-from artefact.data import load_dataset
+from baseline_support import load_original_baseline
 
 
 class HermesCommercialBlockerTests(unittest.TestCase):
@@ -134,10 +134,7 @@ class HermesCommercialBlockerTests(unittest.TestCase):
         self.assertIn('esclareça', result.lower())
 
     def test_original_catalog_divergence_is_plan_independent(self):
-        path = Path(r'C:\App\Artefact\Desafio Técnico AI Engineer 2026\data')
-        if not path.exists():
-            self.skipTest('original local baseline unavailable')
-        self.snapshot = load_dataset(path, verify_baseline=True)
+        self.snapshot = load_original_baseline(self)
         name = 'Teclado Sintetizador Korg Synth 1 Pro'
         plans = [fixtures.call('installment_quote', {'amount_brl': '900.00', 'installments': 3}),
                  fixtures.call('search_products', {'text': name, 'installments': 3})]

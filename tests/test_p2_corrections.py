@@ -10,6 +10,7 @@ from test_data import ROWS, write_dataset
 from artefact.conversation import ConversationAgent
 from artefact.data import load_dataset
 from artefact.services import Catalog, OrderService
+from baseline_support import load_original_baseline
 
 
 def product_row(product_id, price, name, stock=1, status='active'):
@@ -74,10 +75,7 @@ class P2CorrectionTests(unittest.TestCase):
         self.assertEqual(agent.last_trace['executed_tools'], ['cheapest_product'])
 
     def test_b08_real_baseline_selects_product_119_as_global_minimum(self):
-        data = Path(r'C:\App\Artefact\Desafio Técnico AI Engineer 2026\data')
-        if not data.exists():
-            self.skipTest('original local baseline unavailable')
-        snapshot = load_dataset(data, verify_baseline=True)
+        snapshot = load_original_baseline(self)
         cheapest = Catalog(snapshot).cheapest_available()
         self.assertEqual(cheapest['product_id'], 119)
         self.assertEqual(cheapest['name'], 'Shelby SU-21S Soprano Sunburst')
@@ -114,10 +112,7 @@ class P2CorrectionTests(unittest.TestCase):
         self.assertEqual(agent.last_trace['executed_tools'], ['orders'])
 
     def test_g05_original_baseline_order_three_comparison_uses_authorized_name_and_is_sanitized(self):
-        data = Path(r'C:\App\Artefact\Desafio Técnico AI Engineer 2026\data')
-        if not data.exists():
-            self.skipTest('original local baseline unavailable')
-        snapshot = load_dataset(data, verify_baseline=True)
+        snapshot = load_original_baseline(self)
         order = next(row for row in snapshot.tables['orders'] if row['order_id'] == 3)
         customer = next(row for row in snapshot.tables['customers'] if row['customer_id'] == order['customer_id'])
         result = OrderService(snapshot).lookup(customer['name'], order_id=3, include_catalog_comparison=True)
@@ -178,10 +173,7 @@ class P2CorrectionTests(unittest.TestCase):
         self.assertEqual(agent.last_trace['tool_executions'][0]['max_price_brl'], '1500.00')
 
     def test_lr02_original_baseline_finds_shelby_with_brazilian_budget(self):
-        data = Path(r'C:\App\Artefact\Desafio Técnico AI Engineer 2026\data')
-        if not data.exists():
-            self.skipTest('original local baseline unavailable')
-        snapshot = load_dataset(data, verify_baseline=True)
+        snapshot = load_original_baseline(self)
         provider = ScriptedProvider([call('search_products',
             {'max_price': '1.500', 'available_only': True})])
         answer = ConversationAgent(snapshot, provider).answer(
