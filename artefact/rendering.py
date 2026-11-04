@@ -226,7 +226,7 @@ def render_results(results):
                 raise ValueError('invalid clarification')
             operation=data.get('tool')
             if operation=='search_products':
-                lines.append('Não realizei a busca de produtos porque o filtro não correspondeu ao pedido; esclareça essa parte.')
+                lines.append('Não consegui identificar essa busca com segurança. Qual instrumento ou modelo você quer ver? Se tiver um limite de preço, me conte também.')
             elif operation=='policy':
                 if data.get('topic') == 'shipping':
                     lines.append('Não consegui responder à pergunta sobre frete; esclareça essa parte para que eu consulte a política.')

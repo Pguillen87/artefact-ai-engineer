@@ -21,6 +21,7 @@ class ConversationContext:
     customer_id: int | None = None
     policy_topic: str | None = None
     commercial: CommercialBasis | None = None
+    awaiting_budget: bool = False
 
 
 @dataclass(frozen=True)

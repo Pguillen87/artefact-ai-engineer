@@ -322,7 +322,7 @@ class P2CorrectionTests(unittest.TestCase):
                               chat_id='LR08-partial')
 
         self.assertIn('Frete metropolitano', answer)
-        self.assertIn('não realizei a busca de produtos', answer.lower())
+        self.assertIn('não consegui identificar essa busca', answer.lower())
         self.assertEqual(agent.last_trace['executed_tools'], ['policy'])
         self.assertEqual(agent.last_trace['rejected_tools'][0]['reason'], 'catalog_filter_not_grounded')
 

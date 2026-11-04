@@ -148,6 +148,46 @@ def mentioned_category_ids(text: str, snapshot) -> frozenset[int]:
     return frozenset(mentioned_categories)
 
 
+def normalize_catalog_args(name, args, text, snapshot):
+    """Resolve a category alias only when both proposal and customer ground it.
+
+    Names, budgets and negation still go through the original validator. A
+    broad term such as 'sopro' cannot silently choose between two categories.
+    """
+    if name not in {'search_products', 'recommend_products'}:
+        return args
+    args = dict(args)
+    requested = mentioned_category_ids(text, snapshot)
+    if len(requested) != 1:
+        return args
+    category = next(row for row in snapshot.tables['categories'] if row['category_id'] in requested)
+    aliases = {normalize(category['name'])}
+    # Complete phrases only. Token stemming is useful for recognizing a
+    # customer's category, but would erase short constraints like aço/7 cordas.
+    groups = {'violoes':{'violao','violoes'}, 'guitarras':{'guitarra','guitarras'},
+              'baixos':{'baixo','baixos'}, 'baterias':{'bateria','baterias','percussao'},
+              'teclados':{'teclado','teclados','piano','pianos','sintetizador','sintetizadores','arranjador','arranjadores'},
+              'ukuleles':{'ukulele','ukuleles'}}
+    for token, values in groups.items():
+        if token in _words(category['name']): aliases.update(values)
+    def same_category(value):
+        if not isinstance(value, str) or not value.strip():
+            return False
+        return (normalize(value) in aliases and
+                mentioned_category_ids(value, snapshot) == requested)
+    if same_category(args.get('category')):
+        args['category'] = category['name']
+    if same_category(args.get('text')) and 'category' not in args:
+        args.pop('text')
+        args['category'] = category['name']
+    if (name == 'search_products' and args.get('category') == category['name'] and
+            'available_only' not in args and
+            re.search(r'\b(?:quero|procuro|busco|comprar|opcoes|disponivel|disponiveis)\b', normalize(text)) and
+            not re.search(r'\b(?:indisponiveis|indisponivel|esgotados?|sem estoque)\b', normalize(text))):
+        args['available_only'] = True
+    return args
+
+
 def _non_price_unit(text: str, end: int) -> bool:
     return bool(re.match(r'\s*(?:anos?|meses?|dias?|parcelas?|vezes|teclas?|cordas?|x\b|%)', text[end:]))
 

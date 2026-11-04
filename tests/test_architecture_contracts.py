@@ -64,16 +64,16 @@ class ArchitectureContracts(unittest.TestCase):
         provider=Mock(); provider.request.return_value={'output':[tool('search_products',{'category':'Teclados e Pianos'})]}
         answer=ConversationAgent(self.snapshot,provider).answer('Procuro Korg Synthesizer',chat_id=1)
         self.assertNotIn('Korg Synth:',answer)
-        self.assertIn('esclareça',answer.lower())
+        self.assertIn('?',answer)
         provider.request.return_value={'output':[tool('search_products',{'text':'Korg'})]}
         answer=ConversationAgent(self.snapshot,provider).answer('Procuro Korg Synthesizer',chat_id=1)
         self.assertNotIn('Korg Synth:',answer)
-        self.assertIn('esclareça',answer.lower())
+        self.assertIn('?',answer)
 
     def test_empty_search_does_not_return_catalog(self):
         provider=Mock(); provider.request.return_value={'output':[tool('search_products',{})]}
         answer=ConversationAgent(self.snapshot,provider).answer('Quero consultar um produto',chat_id=1)
-        self.assertIn('esclareça',answer.lower()); self.assertNotIn('Korg Synth:',answer)
+        self.assertIn('?',answer); self.assertNotIn('Korg Synth:',answer)
 
     def test_ambiguous_category_requires_its_qualifier(self):
         with TemporaryDirectory() as directory:
@@ -100,7 +100,7 @@ class ArchitectureContracts(unittest.TestCase):
             ('Quero teclado até R$ 500', 'search_products', {'category':'Teclados e Pianos','max_price':'1200'}),
             ('Quero teclado até R$ 500', 'search_products', {'category':'Teclados e Pianos'}),
             ('Quero teclado até R$ 1200', 'search_products', {'max_price':'1200'}),
-            ('Quais teclados disponíveis?', 'search_products', {'category':'Teclados e Pianos'}),
+            ('Quais teclados disponíveis?', 'search_products', {'category':'Teclados e Pianos','available_only':False}),
             ('Teclados entre 800 e 2000', 'search_products', {'category':'Teclados e Pianos','max_price':'800'}),
             ('Qual o Korg de R$ 900 em 3x?', 'search_products', {'text':'Korg','max_price':'900'}),
             ('Qual promoção do produto 9?', 'promotion', {'product_id':1}),
@@ -112,8 +112,9 @@ class ArchitectureContracts(unittest.TestCase):
         for text, name, args in cases:
             with self.subTest(text=text):
                 provider=Mock(); provider.request.return_value={'output':[tool(name,args)]}
-                answer=ConversationAgent(self.snapshot,provider).answer(text,chat_id=1)
-                self.assertIn('esclareça',answer.lower())
+                agent=ConversationAgent(self.snapshot,provider)
+                answer=agent.answer(text,chat_id=1)
+                self.assertNotIn(name,agent.last_trace['executed_tools'])
                 self.assertNotIn('Korg Synth:',answer)
         provider=Mock(); provider.request.return_value={'output':[tool('search_products',{'category':'Teclados e Pianos','max_price':'1200'})]}
         answer=ConversationAgent(self.snapshot,provider).answer('Quero teclado até R$ 1.200',chat_id=1)

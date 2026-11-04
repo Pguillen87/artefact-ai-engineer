@@ -8,6 +8,7 @@ import time
 from .agent import Agent, CLARIFY, FALLBACK, TOOLS, WRITE_ISOLATION, WRITE_UNCERTAIN, prepare_commercial_call, validate_execution_plan
 from .context import explicit_customer, explicit_product, next_context, order_followup, product_followup, resolve_commercial_basis, confirms_catalog_price
 from .rendering import render_results
+from .sales import render_sales_results, resolve_budget_reply, BUDGET_QUESTION
 from .intent import normalize, product_reference, validate_catalog_intent, validate_policy_intent
 from .commercial import money_mentions, parse_brl_mention
 from .context import pix_policy_followup
@@ -153,17 +154,19 @@ class ConversationAgent:
             self.last_trace.update(status='error', error_code='invalid_message')
             event(op, 'conversation', 'complete', 'validation', 'failure')
             return FALLBACK
+        prior = self.context.get(chat_id) if chat_id is not None else None
+        if prior and prior.awaiting_budget:
+            self._remember(self.context, chat_id, replace(prior, awaiting_budget=False))
         if text.strip() == '/start' or _GREETING.fullmatch(text.strip()):
             self.last_trace.update(status='local', stage='greeting')
             event(op, 'conversation', 'complete', 'conversation', 'success')
-            return 'Olá! Como posso ajudar com instrumentos, pedidos ou políticas da loja?'
+            return 'Olá! Bem-vindo ao Empório da Música. Qual instrumento você está procurando? Também posso ajudar com um pedido ou uma dúvida sobre a loja.'
         if re.fullmatch(r'(o que voc[eê] faz|quem [eé] voc[eê]|como voc[eê] pode ajudar)[?! .]*', text.strip(), re.I):
             self.last_trace.update(status='local', stage='capabilities')
             event(op, 'conversation', 'complete', 'conversation', 'success')
             return 'Posso ajudar com produtos, pedidos fictícios e políticas da loja.'
 
-        prior = self.context.get(chat_id) if chat_id is not None else None
-        current = next_context(text, prior, (prior.turn + 1) if prior else 1)
+        current = replace(next_context(text, prior, (prior.turn + 1) if prior else 1), awaiting_budget=False)
         self._remember(self.context, chat_id, current)
         previous = self.history.get(chat_id, []) if chat_id is not None else []
         messages = list(previous) + [{'role': 'user', 'content': text}]
@@ -171,6 +174,9 @@ class ConversationAgent:
         stage = 'snapshot'
         try:
             snapshot = self.snapshot_loader() if self.snapshot_loader else self.snapshot
+            scoped_text = resolve_budget_reply(text, prior, snapshot)
+            if scoped_text != text:
+                messages[-1] = {'role':'user','content':scoped_text}
             explicit = explicit_product(text, snapshot)
             comparison = bool(re.search(r'(?i)\b(?:compar\w*|versus|vs)\b', text))
             if comparison:
@@ -181,7 +187,7 @@ class ConversationAgent:
             if customer_id is not None:
                 current = replace(current, customer_id=customer_id)
                 self._remember(self.context, chat_id, current)
-            basis = resolve_commercial_basis(text, snapshot, prior)
+            basis = resolve_commercial_basis(scoped_text, snapshot, prior)
             self.last_trace['commercial_basis'] = {
                 'kind': basis.kind, 'amount_role': basis.amount_role,
                 'amount_brl': format(basis.amount, '.2f') if basis.amount is not None else None,
@@ -261,7 +267,7 @@ class ConversationAgent:
                 plans = [forced_plan if plan.name == 'policy' else plan for plan in plans]
             # Context supplies identity only for bounded references. It does not
             # amend the user's current words to manufacture consent.
-            validation_text = text
+            validation_text = scoped_text
             product_id = explicit['product_id'] if explicit is not None else None
             if prior and basis.source == 'session' and basis.product and not basis.restriction:
                 validation_text = text + ' ' + basis.product['name']
@@ -444,7 +450,10 @@ class ConversationAgent:
                     entry['consulta'] == 'search_products' and any(item.get('installment_quote', {}).get('status') in {'eligible', 'below_minimum'}
                                                                  for item in entry['resultado'])
                     for entry in results)
-            answer = render_results(results)
+            answer = render_sales_results(results, scoped_text, snapshot)
+            if answer.endswith(BUDGET_QUESTION):
+                current = replace(current, awaiting_budget=True)
+                self._remember(self.context, chat_id, current)
             if len(answer) > 3500:
                 event(op, 'conversation', 'complete', 'validation', 'failure', side_effect='committed' if written else 'none', duration_ms=int((time.monotonic()-started)*1000))
                 return 'A resposta é longa demais. Por favor, refine sua consulta.'

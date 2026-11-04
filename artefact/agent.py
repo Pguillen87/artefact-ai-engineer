@@ -11,12 +11,12 @@ import urllib.request
 from .services import Catalog, OrderService, get_policy
 from .commercial import quote_installments, parse_brl_mention
 from .intent import (normalize, mentioned_category_ids, validate_catalog_intent,
-                     validate_policy_intent, validate_cheapest_intent)
+                     validate_policy_intent, validate_cheapest_intent, normalize_catalog_args)
 from .context import explicit_product, explicit_order_id, name_in_text, resolve_commercial_basis
 from .telemetry import bind_operation, event, operation_id, reset_operation
 
 FALLBACK = 'Desculpe, não consegui consultar os dados agora. Tente novamente.'
-CLARIFY = 'Por favor, esclareça o produto e os filtros que deseja consultar.'
+CLARIFY = 'Qual instrumento ou modelo você procura? Se tiver uma faixa de preço em mente, me conte também para eu encontrar opções que façam sentido para você.'
 WRITE_UNCERTAIN = 'Não foi possível confirmar o resultado da solicitação. Consulte a loja antes de tentar novamente.'
 WRITE_ISOLATION = 'Para registrar a revisão, envie esse pedido separadamente das demais consultas.'
 TOOLS = [
@@ -153,6 +153,7 @@ def prepare_commercial_call(name, args, text, snapshot, decision, product_id=Non
     The provider can choose either quote route, but cannot choose the price
     source, replace the product, invent arguments, or lift a restriction.
     """
+    args = normalize_catalog_args(name, args, text, snapshot)
     if name in {'search_products', 'recommend_products', 'promotion', 'cheapest_product', 'installment_quote'} and decision.restriction in {'budget_unresolved', 'budget_includes_shipping'}:
         raise ValueError(decision.restriction)
     if name == 'recommend_products':
@@ -345,7 +346,10 @@ class Agent:
                         args['allow_unfiltered']=True
                     if decision.scope.max_price is not None:
                         args['max_price'] = min(args.get('max_price', decision.scope.max_price), decision.scope.max_price)
-                    result=self.catalog.search(**args,limit=5,
+                    browsing = (len(execution_plan if execution_plan is not None else plan) == 1 and
+                                args.get('category') and not args.get('text') and count is None and
+                                not re.search(r'\b(?:preco|precos|pix|parcel\w*|promoc\w*|desconto\w*)\b',normalize(text)))
+                    result=self.catalog.search(**args,limit=50 if browsing else 5,
                         excluded_ids=decision.scope.excluded_ids, product_ids=decision.scope.selection_for(args))
                     if name=='search_products' and not decision.scope.options:
                         explicit = explicit_product(text,self.snapshot)
