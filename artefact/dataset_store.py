@@ -69,11 +69,14 @@ class DatasetStore:
                 raise StructuralError('Nome ou conteúdo de arquivo inválido')
             table = name[:-4] if name.endswith('.csv') else ''
             if table.startswith(PREFIX): table = table[len(PREFIX):]
-            if table not in SCHEMAS or table in files: raise StructuralError('Arquivo desconhecido ou duplicado')
-            if len(raw) > MAX_FILE_BYTES: raise StructuralError('Arquivo excede o limite')
+            if table not in SCHEMAS: raise StructuralError(f'{name}: arquivo desconhecido')
+            if table in files: raise StructuralError(f'{name}: arquivo duplicado')
+            if len(raw) > MAX_FILE_BYTES: raise StructuralError(f'{name}: arquivo excede 10 MiB')
             if official and hashlib.sha256(raw).hexdigest() != HASHES[table]: raise StructuralError(f'{table}: source hash mismatch')
             files[table] = raw
-        if set(files) != set(SCHEMAS): raise StructuralError('São necessários os seis arquivos CSV')
+        if set(files) != set(SCHEMAS):
+            missing = ', '.join(name + '.csv' for name in SCHEMAS if name not in files)
+            raise StructuralError('São necessários os seis arquivos CSV. Ausentes: ' + missing)
         if sum(map(len, files.values())) > MAX_TOTAL_BYTES: raise StructuralError('Carga excede o limite')
         return files
 
