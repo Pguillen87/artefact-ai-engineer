@@ -32,7 +32,7 @@ class ArchitectureContracts(unittest.TestCase):
             with self.subTest(args=args), self.assertRaises(ValueError): catalog.search(**args)
         self.assertEqual(len(catalog.search(category='Teclados e Pianos')), 1)
         self.assertEqual(len(catalog.search(max_price=Decimal('1200'))), 1)
-        self.assertEqual(len(catalog.search(available_only=True)), 1)
+        self.assertEqual(len(catalog.search(available_only=True, allow_unfiltered=True)), 1)
         self.assertEqual(len(catalog.search(text='Korg', category='Teclados e Pianos', max_price=Decimal('1200'))), 1)
         self.assertEqual(catalog.search(text='produto inexistente'), ())
 
@@ -100,7 +100,7 @@ class ArchitectureContracts(unittest.TestCase):
             ('Quero teclado até R$ 500', 'search_products', {'category':'Teclados e Pianos','max_price':'1200'}),
             ('Quero teclado até R$ 500', 'search_products', {'category':'Teclados e Pianos'}),
             ('Quero teclado até R$ 1200', 'search_products', {'max_price':'1200'}),
-            ('Quais teclados disponíveis?', 'search_products', {'category':'Teclados e Pianos','available_only':False}),
+            ('Quais teclados disponíveis até R$ 1.200?', 'search_products', {'category':'Teclados e Pianos','available_only':False,'max_price':'1200'}),
             ('Teclados entre 800 e 2000', 'search_products', {'category':'Teclados e Pianos','max_price':'800'}),
             ('Qual o Korg de R$ 900 em 3x?', 'search_products', {'text':'Korg','max_price':'900'}),
             ('Qual promoção do produto 9?', 'promotion', {'product_id':1}),
@@ -124,7 +124,7 @@ class ArchitectureContracts(unittest.TestCase):
         self.assertIn('qual tipo ou categoria',answer.lower())
         self.assertNotIn('Korg Synth:',answer)
         provider.request.return_value={'output':[tool('search_products',{'available_only':True})]}
-        self.assertIn('Korg Synth:',ConversationAgent(self.snapshot,provider).answer('Quais produtos disponíveis?',chat_id=1))
+        self.assertIn('Korg Synth (Teclados e Pianos)',ConversationAgent(self.snapshot,provider).answer('Quais produtos disponíveis?',chat_id=1))
         provider.request.return_value={'output':[tool('search_products',{'category':'Teclados e Pianos','min_price':'800','max_price':'2000'})]}
         self.assertIn('Korg Synth:',ConversationAgent(self.snapshot,provider).answer('Teclados entre 800 e 2000',chat_id=1))
         provider.request.return_value={'output':[tool('search_products',{'category':'Teclados e Pianos','max_price':'1200','installments':3})]}

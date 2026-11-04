@@ -55,7 +55,7 @@ class EffectiveBudgetTests(unittest.TestCase):
         self.assertEqual(Catalog(invalid).search(max_price=Decimal('600')), ())
         unavailable = self.snapshot({'products': {'status': 'coming_soon', 'stock_quantity': '2'}})
         self.assertEqual(Catalog(unavailable).search(max_price=Decimal('2000')), ())
-        self.assertFalse(Catalog(unavailable).search(text='Korg')[0]['available'])
+        self.assertFalse(Catalog(unavailable).search(text='Korg', available_only=False)[0]['available'])
 
     def test_recommendation_order_uses_checkout_not_list_or_pix(self):
         other = list(ROWS['products']); other[0]='2'; other[1]='500'; other[2]='Korg Alternative'

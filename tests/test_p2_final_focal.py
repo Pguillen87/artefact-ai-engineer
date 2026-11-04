@@ -59,13 +59,12 @@ class FinalFocalTests(unittest.TestCase):
     def test_refusal_survives_relevant_followup_and_explicit_reselection_restores(self):
         provider = fixtures.ScriptedProvider(
             [fixtures.call('recommend_products', {'category': 'Teclados e Pianos'})],
-            [fixtures.call('recommend_products', {'category': 'Teclados e Pianos'})],
             [fixtures.call('search_products', {'text': 'Korg', 'installments': 3})])
         agent = ConversationAgent(self.snapshot, provider)
         agent.answer('Não quero Korg. Recomende opções de teclados.', chat_id='scope')
         second = agent.answer('Mostre outras opções de teclados.', chat_id='scope')
         self.assertNotIn('Korg Synth:', second)
-        self.assertIn('Yamaha PSR', second)
+        self.assertIn('Já mostrei todas as opções', second)
         third = agent.answer('Quero novamente o Korg em 3x.', chat_id='scope')
         self.assertIn('375,67', third)
 

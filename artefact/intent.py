@@ -104,7 +104,7 @@ def product_reference(text: str, name: str) -> str:
             return 'comparison'
         if re.match(r'\s*(?:custa|vale|tem|qual|quanto|preco|valor|disponibilidade|estoque|promocao|garantia|foi\s+anunciad[oa])\b', tail):
             return 'affirmative'
-        if re.search(r'\b(?:quero|prefiro|escolho|escolhi|escolha|mostre|procuro|preco|valor|custa|tem|qual|quanto|disponibilidade|estoque|promocao)\b', prefix):
+        if re.search(r'\b(?:quero|prefiro|escolho|escolhi|escolha|mostre|procuro|comprar|adquirir|preco|valor|custa|tem|qual|quanto|disponibilidade|estoque|promocao)\b', prefix):
             return 'affirmative'
         return 'mentioned'
     return 'unmentioned'
@@ -146,6 +146,90 @@ def mentioned_category_ids(text: str, snapshot) -> frozenset[int]:
                                      if c['category_id'] in clause_categories and qualifier in _words(c['name'])}
         mentioned_categories.update(clause_categories)
     return frozenset(mentioned_categories)
+
+
+def is_catalog_discovery(text: str, snapshot) -> bool:
+    """Recognize a clear, unfiltered question about the store's product range."""
+    if not isinstance(text, str) or snapshot is None:
+        return False
+    spoken = normalize(text)
+    if mentioned_category_ids(text, snapshot) or mentioned_products(text, snapshot):
+        return False
+    if re.search(r'\b(?:pedido\w*|frete|entrega|garantia|troca|pix|parcel\w*|politica|horario|clima)\b', spoken):
+        return False
+    return bool(re.search(
+        r'\b(?:o que|que que|quais?|qual)\s+(?:(?:voces?|a loja)\s+)?'
+        r'(?:produtos?\s+)?(?:tem|ha|vende\w*|disponibiliza\w*|trabalha\w*)\b', spoken
+    ) or re.search(r'\b(?:quais?|qual)\s+produtos?\s+(?:disponiveis?|em estoque)\b', spoken)
+      or re.search(r'\b(?:catalogo|produtos?\s+da\s+loja)\b.*\b(?:tem|mostr\w*|ver|conhecer)\b', spoken))
+
+
+def direct_catalog_plan(text: str, snapshot):
+    """Return only an unambiguous discovery/category listing shortcut."""
+    if is_catalog_discovery(text, snapshot):
+        return 'catalog_overview', {}
+    categories = mentioned_category_ids(text, snapshot)
+    spoken = normalize(text)
+    if re.search(r'\b(?:mais|outras?)\s+opcoes\b', spoken):
+        return None
+    bare_category = len(categories) == 1 and _category_terms(spoken) == {
+        term for row in snapshot.tables['categories'] if row['category_id'] in categories
+        for term in _category_terms(row['name'])
+    }
+    if (len(categories) != 1 or
+            (not bare_category and not re.search(r'\b(?:quais?|que que|o que|tem|vende\w*|opcoes|modelos?|instrumentos?)\b', spoken)) or
+            re.search(r'\b(?:nao|nunca|sem|exceto|preco|orcamento|ate|abaixo|acima|entre|nylon|aco|marca)\b', spoken)):
+        return None
+    category_id = next(iter(categories))
+    category = next((row for row in snapshot.tables['categories'] if row['category_id'] == category_id), None)
+    if category is None:
+        return None
+    category_words = _words(category['name']) | _category_terms(category['name'])
+    generic_words = {
+        'a', 'as', 'de', 'do', 'da', 'dos', 'das', 'e', 'em', 'para', 'por', 'o', 'os', 'voce',
+        'um', 'uma', 'uns', 'umas', 'que', 'quais', 'qual', 'voces', 'loja', 'tem', 'temos',
+        'ha', 'vende', 'vender', 'disponivel', 'disponiveis', 'estoque', 'venda', 'opcoes',
+        'modelos', 'instrumentos', 'instrumento', 'produtos', 'produto',
+    }
+    if _words(spoken) - category_words - generic_words:
+        return None
+    return 'search_products', {'category': category['name'], 'available_only': True}
+
+
+def has_independent_catalog_request(text: str, snapshot) -> bool:
+    """Keep a catalog request in the planner when a message also asks about policy."""
+    for clause in intent_clauses(text):
+        if (is_catalog_discovery(clause, snapshot) or
+                (direct_catalog_plan(clause, snapshot) is not None and re.search(
+                    r'\b(?:quais?|que que|o que|tem|vende\w*|opcoes|modelos?|instrumentos?)\b',
+                    normalize(clause)))):
+            return True
+        if clause_polarity(clause) != 'affirmative':
+            continue
+        if not (mentioned_products(clause, snapshot) or mentioned_category_ids(clause, snapshot)):
+            continue
+        request = re.sub(r'\b(?:quero|gostaria de)\s+saber\b', '', clause)
+        if re.search(r'\b(?:quero|gostaria de|procuro|busco|comprar|adquirir|'
+                     r'mostre|recomende|indique|opcoes|alternativas)\b', request):
+            return True
+    return False
+
+
+def direct_product_status_plan(text: str, snapshot):
+    """Use the identified product record for a clear purchase or stock question."""
+    if not isinstance(text, str) or snapshot is None:
+        return None
+    spoken = normalize(text)
+    if not re.search(
+        r'\b(?:posso|consigo|da para|tem como)\s+(?:comprar|adquirir)\b|'
+        r'\b(?:quero|gostaria de|pretendo|vou)\s+(?:comprar|adquirir)\b|'
+        r'\b(?:esta disponivel|tem disponivel|tem estoque|esta em estoque|ha estoque)\b', spoken):
+        return None
+    products = [product for product in mentioned_products(text, snapshot)
+                if product_reference(text, product['name']) == 'affirmative']
+    if len(products) != 1:
+        return None
+    return 'product_detail', {'product_id': products[0]['product_id']}
 
 
 def normalize_catalog_args(name, args, text, snapshot):
@@ -210,39 +294,83 @@ def _money_values(text: str) -> set[Decimal]:
     return values
 
 
+_POLICY_TOPIC_PATTERNS = {
+    'exchange': r'\b(?:troca\w*|trocar|defeito\w*)\b',
+    'warranty': r'\b(?:garantia\w*|fabricante|mau uso|cobertura)\b',
+    'regret': r'\b(?:arrepend\w*|desist\w*|devolu\w*|devolver)\b',
+    'shipping': r'\b(?:frete|envio|entrega|entregar|cheg\w*)\b',
+    'installments': r'\b(?:parcel\w*|vezes|crediario)\b',
+    'payment_mix': r'\b(?:combinar|dividir|misturar|formas de pagamento|pagamentos)\b',
+    'pix': r'\bpix\b',
+    'hours': r'\b(?:horario\w*|funcionamento|aberto|abre|fecha)\b',
+    'contacts': r'\b(?:contato\w*|telefone|vendedor\w*|ligar|whats?\s*app|wpp|zap)\b',
+    'scope': r'\b(?:acessorios?|palhetas?|cabos|amplificadores|previsao do tempo|clima)\b',
+}
+_BRAZILIAN_UFS = frozenset({
+    'ac', 'al', 'ap', 'am', 'ba', 'ce', 'df', 'es', 'go', 'ma', 'mt', 'ms', 'mg',
+    'pa', 'pb', 'pr', 'pe', 'pi', 'rj', 'rn', 'rs', 'ro', 'rr', 'sc', 'sp', 'se', 'to',
+})
+
+
+def requested_policy_topics(text: str) -> frozenset[str]:
+    """Return the unnegated policy topics explicitly requested in this message."""
+    spoken = normalize(text)
+    mentioned = {key for key, pattern in _POLICY_TOPIC_PATTERNS.items()
+                 if re.search(pattern, spoken)}
+    requested = set()
+    for topic in mentioned:
+        for clause in intent_clauses(text):
+            if not re.search(_POLICY_TOPIC_PATTERNS[topic], clause):
+                continue
+            # A reported negative experience can still ask for the applicable policy.
+            request_clause = re.sub(r'\bnao\s+(?:gostei|chegou|recebi|funciona|foi entregue)\b', '', clause)
+            polarity = clause_polarity(request_clause)
+            # Informational conditions differ from deferred commands.
+            if polarity == 'conditional' and not re.search(
+                    r'\b(?:consulte|mostre|informe|responda)\b', clause):
+                requested.add(topic)
+                break
+            if polarity == 'affirmative':
+                requested.add(topic)
+                break
+    return frozenset(requested)
+
+
 def validate_policy_intent(topic: str, text: str) -> bool:
     """Reject policy topics contradicted by an explicit topic in this turn."""
+    return topic in requested_policy_topics(text)
+
+
+def local_shipping_destination(text: str) -> bool:
+    """Recognize the store's local Campo Grande/MS destination in delivery context."""
     spoken = normalize(text)
-    patterns = {
-        'exchange': r'\b(?:troca\w*|trocar|defeito\w*)\b',
-        'warranty': r'\b(?:garantia\w*|fabricante|mau uso|cobertura)\b',
-        'regret': r'\b(?:arrepend\w*|desist\w*|devolu\w*|devolver)\b',
-        'shipping': r'\b(?:frete|envio|entrega|entregar|cheg\w*)\b',
-        'installments': r'\b(?:parcel\w*|vezes|crediario)\b',
-        'payment_mix': r'\b(?:combinar|dividir|misturar|formas de pagamento|pagamentos)\b',
-        'pix': r'\bpix\b',
-        'hours': r'\b(?:horario\w*|funcionamento|aberto|abre|fecha)\b',
-        'contacts': r'\b(?:contato\w*|telefone|vendedor\w*|ligar)\b',
-        'scope': r'\b(?:acessorios?|palhetas?|cabos|amplificadores|previsao do tempo|tempo|clima|vendem|vende)\b',
-    }
-    mentioned = {key for key, pattern in patterns.items() if re.search(pattern, spoken)}
-    if topic not in mentioned:
+    for destination in re.finditer(
+            r'\b(?:para|em|destino|entrega em|envio para)\s+(?:o\s+)?'
+            r'([a-z]+(?:\s+[a-z]+){0,2})\s*(?:/|,|-)\s*([a-z]{2})\b', spoken):
+        city, state_code = destination.groups()
+        if state_code in _BRAZILIAN_UFS and (city != 'campo grande' or state_code != 'ms'):
+            return False
+    state = re.search(r'\bcampo grande(?:\s*/\s*|\s*,\s*|\s+-\s*|\s+)([a-z]{2})\b', spoken)
+    if state and state.group(1) in _BRAZILIAN_UFS and state.group(1) != 'ms':
         return False
-    for clause in intent_clauses(text):
-        if not re.search(patterns[topic], clause):
-            continue
-        # Negated experiences can motivate a policy question; they are not
-        # refusals of the consultation. Every other negative stays negative,
-        # including unfamiliar directives and pronouns ("não me informe").
-        request_clause = re.sub(r'\bnao\s+(?:gostei|chegou|recebi|funciona|foi entregue)\b', '', clause)
-        polarity = clause_polarity(request_clause)
-        # An informational condition ("se der R$500, o frete é grátis?") is
-        # different from deferring a command ("se eu pedir, consulte frete").
-        if polarity == 'conditional' and not re.search(r'\b(?:consulte|mostre|informe|responda)\b', clause):
-            return True
-        if polarity == 'affirmative':
-            return True
-    return False
+    explicit = bool(state and state.group(1) == 'ms')
+    local_city = re.search(r'\b(?:para|em|ate)\s+(?:o\s+)?campo grande\b', spoken)
+    return bool(explicit or local_city)
+
+
+def is_shipping_quote_request(text: str, snapshot) -> bool:
+    """Separate a freight amount request from a general question about shipping policy."""
+    spoken = normalize(text)
+    has_freight = bool(re.search(r'\bfrete\b', spoken))
+    if not has_freight:
+        return False
+    has_amount_question = bool(re.search(
+        r'\b(?:valor|preco|quanto|custa|custo|taxa|cotacao|cotar)\b', spoken))
+    if re.search(r'\b(?:politica|regras?|condicoes?)\b', spoken) and not has_amount_question:
+        return False
+    if has_amount_question or re.search(r'\bqual\s+(?:o\s+)?frete\b', spoken):
+        return True
+    return bool(local_shipping_destination(text) or mentioned_products(text, snapshot))
 
 
 def validate_cheapest_intent(text: str, snapshot) -> bool:
@@ -279,12 +407,22 @@ def validate_catalog_intent(name: str, args: dict, text: str, snapshot, product_
                     normalize(product['name']) in normalized or product_id == pid)
     if name not in {'search_products', 'recommend_products'}:
         return True
+    explicit_products = [p for p in snapshot.tables['products']
+                         if re.search(r'(?<!\w)' + re.escape(normalize(p['name'])) + r'(?!\w)', normalized)]
+    product_installment_lookup = bool(
+        name == 'search_products' and type(args.get('installments')) is int and
+        product_id is not None and set(args) <= {'text', 'installments', 'available_only'} and
+        isinstance(args.get('text'), str) and len(explicit_products) == 1 and
+        explicit_products[0]['product_id'] == product_id and
+        normalize(args['text']) == normalize(explicit_products[0]['name']) and
+        product_reference(text, explicit_products[0]['name']) != 'rejected')
     if name == 'search_products' and re.search(r'\bdisponiveis\b', normalized) and args.get('available_only') is not True:
         return False
     if args.get('available_only') is True and re.search(r'\bindisponiveis\b', normalized):
         return False
-    explicit_products = [p for p in snapshot.tables['products']
-                         if re.search(r'(?<!\w)' + re.escape(normalize(p['name'])) + r'(?!\w)', normalized)]
+    if name == 'search_products' and args.get('available_only') is False and not re.search(
+            r'\b(?:indisponiveis|indisponivel|esgotados?|sem estoque)\b', normalized) and not product_installment_lookup:
+        return False
     negation = (r'(?:nao quero(?:\s+mais)?|nao (?:me )?(?:recomende|recomendar|indique|sugira)|'
                 r'nao gosto de|nao o|nao a|sem|exceto)\s+(?:(?:o|a)\s+)?')
     query = args.get('text')
@@ -335,6 +473,25 @@ def validate_catalog_intent(name: str, args: dict, text: str, snapshot, product_
             return False
     elif mentioned_categories and not (len(explicit_products) == 1 and explicit_products[0]['category_id'] in mentioned_categories):
         return False
+    terms = []
+    for key in ('brand', 'model'):
+        term = args.get(key)
+        if term is not None:
+            if not isinstance(term, str) or not term.strip() or len(term) > 80:
+                return False
+            terms.append(term)
+    features = args.get('features', [])
+    if (not isinstance(features, list) or len(features) > 8 or
+            any(not isinstance(term, str) or not term.strip() or len(term) > 80 for term in features)):
+        return False
+    terms.extend(features)
+    for term in terms:
+        normalized_term = normalize(term)
+        if normalized_term not in normalized:
+            return False
+        if not any(normalized_term in clause and clause_polarity(clause) == 'affirmative'
+                   for clause in intent_clauses(text)):
+            return False
     values = _money_values(text)
     number = r'(?:r\$\s*)?([0-9][0-9.,]*)'
     interval = re.search(r'\bentre\s*' + number + r'\s+e\s+' + number, normalized)
@@ -366,7 +523,7 @@ def validate_catalog_intent(name: str, args: dict, text: str, snapshot, product_
                 return False
             if key == 'max_price' and re.search(r'\b(?:partir|minimo|acima)\b', normalized) and not re.search(r'\b(?:entre|ate|maximo|abaixo)\b', normalized):
                 return False
-    criteria = any(args.get(key) is not None for key in ('text', 'category', 'min_price', 'max_price'))
+    criteria = any(args.get(key) is not None for key in ('text', 'category', 'brand', 'model', 'min_price', 'max_price')) or bool(features)
     if not criteria and args.get('available_only') is True:
         criteria = bool(re.search(r'\b(?:disponivel|disponiveis|estoque)\b', normalized))
     return criteria or (name == 'recommend_products' and bool(re.search(r'\b(?:recomende|recomenda|sugira|sugere|opcoes|alternativas)\b', normalized)))

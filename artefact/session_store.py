@@ -7,14 +7,19 @@ from decimal import Decimal
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
+import time
 import uuid
 
-from .context import ConversationContext, CommercialBasis, CatalogScope, MonetaryValue
-from .conversation import ConversationAgent
+from .context import (ConversationContext, CommercialBasis, CatalogScope, MonetaryValue,
+                      PendingCatalogSearch, redact_contact_details)
+from .conversation import ConversationAgent, local_only_request
+from .chat_limits import MAX_ASSISTANT_ANSWER_CHARS, MAX_USER_MESSAGE_CHARS
 from .migrations import ensure_schema
 
-_TYPES = {c.__name__: c for c in (ConversationContext, CommercialBasis, CatalogScope, MonetaryValue)}
+_TYPES = {c.__name__: c for c in (ConversationContext, CommercialBasis, CatalogScope,
+                                  MonetaryValue, PendingCatalogSearch)}
 
 class ChatError(Exception):
     def __init__(self, code):
@@ -97,6 +102,10 @@ class SessionStore:
         with closing(self.connect()) as db:
             return [dict(r) for r in db.execute('SELECT id,dataset_version,provider,model,created_at,updated_at FROM chat_sessions ORDER BY updated_at DESC, rowid DESC')]
     def save(self, sid, message, answer, context):
+        if not isinstance(message, str) or len(message) > MAX_USER_MESSAGE_CHARS:
+            raise ChatError('invalid_message')
+        if not isinstance(answer, str) or len(answer) > MAX_ASSISTANT_ANSWER_CHARS:
+            raise ChatError('answer_too_long')
         with closing(self.connect()) as db, db:
             cur=db.execute('UPDATE chat_sessions SET context=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(json.dumps(_encode(context),ensure_ascii=False),sid))
             if not cur.rowcount: raise ChatError('session_not_found')
@@ -110,6 +119,48 @@ class ChatService:
         self.store,self.snapshot_loader,self.provider_factory=store,snapshot_loader,provider_factory
         self.active_version,self.active_provider=active_version,active_provider
         self.review_submit=review_submit
+        self.last_trace = {}
+
+    @staticmethod
+    def _safe_trace(agent_trace, *, snapshot_ms=None, provider_setup_ms=None):
+        safe = {}
+        for key in ('status', 'stage', 'error_code', 'error_type', 'final_response_status'):
+            value = agent_trace.get(key)
+            if isinstance(value, str) and re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,63}', value):
+                safe[key] = value
+        for key in ('selected_tools', 'executed_tools'):
+            values = agent_trace.get(key)
+            if isinstance(values, list):
+                safe[key] = [value for value in values[:3] if isinstance(value, str) and
+                             re.fullmatch(r'[a-z][a-z0-9_]{0,63}', value)]
+        calls = agent_trace.get('model_calls')
+        if isinstance(calls, list):
+            safe_calls = []
+            for call in calls[:2]:
+                if not isinstance(call, dict):
+                    continue
+                entry = {}
+                for key in ('stage', 'status', 'error_code'):
+                    value = call.get(key)
+                    if isinstance(value, str) and re.fullmatch(r'[a-z][a-z0-9_]{0,63}', value):
+                        entry[key] = value
+                for key in ('duration_ms', 'input_tokens', 'output_tokens', 'thought_tokens'):
+                    value = call.get(key)
+                    if type(value) is int and value >= 0:
+                        entry[key] = value
+                safe_calls.append(entry)
+            safe['model_calls'] = safe_calls
+        timings = agent_trace.get('timings_ms')
+        if isinstance(timings, dict):
+            safe['timings_ms'] = {key: value for key, value in timings.items()
+                                  if key in {'snapshot', 'interpretation', 'execution', 'final_response',
+                                             'render', 'persistence', 'provider_setup', 'end_to_end'}
+                                  and type(value) is int and value >= 0}
+        if snapshot_ms is not None:
+            safe.setdefault('timings_ms', {})['snapshot'] = snapshot_ms
+        if provider_setup_ms is not None:
+            safe.setdefault('timings_ms', {})['provider_setup'] = provider_setup_ms
+        return safe
     @staticmethod
     def _public(session):
         return {k:v for k,v in session.items() if k != 'context'}
@@ -124,13 +175,43 @@ class ChatService:
     def delete(self,sid):
         with self.store.lock(sid): self.store.delete(sid)
     def send(self,sid,message):
-        if not isinstance(message,str) or not message.strip() or len(message)>2000: raise ChatError('invalid_message')
+        self.last_trace={'status':'pending','stage':'validation','error_code':None}
+        if (not isinstance(message,str) or not message.strip() or
+                len(message)>MAX_USER_MESSAGE_CHARS):
+            self.last_trace={'status':'error','stage':'validation','error_code':'invalid_message'}
+            raise ChatError('invalid_message')
+        try:
+            sid=str(uuid.UUID(sid))
+        except (ValueError, TypeError, AttributeError):
+            self.last_trace={'status':'error','stage':'session','error_code':'session_not_found'}
+            raise ChatError('session_not_found') from None
+        request_started=time.monotonic()
         with self.store.lock(sid):
-            session=self.store.get(sid)
+            try:
+                session=self.store.get(sid)
+            except ChatError as exc:
+                self.last_trace={'status':'error','stage':'session','error_code':exc.code}
+                raise
+            snapshot_started=time.monotonic()
             try: snapshot=self.snapshot_loader(session['dataset_version'])
-            except (ValueError, KeyError): raise ChatError('dataset_unavailable') from None
-            try: provider=self.provider_factory(session['provider'],session['model'])
-            except (ValueError, KeyError): raise ChatError('provider_unavailable') from None
+            except (ValueError, KeyError):
+                self.last_trace={'status':'error','stage':'snapshot','error_code':'dataset_unavailable'}
+                raise ChatError('dataset_unavailable') from None
+            snapshot_ms=max(0,int((time.monotonic()-snapshot_started)*1000))
+            local_only = local_only_request(message, snapshot, session['context'])
+            if local_only:
+                provider=None
+                provider_setup_ms=0
+            else:
+                provider_started=time.monotonic()
+                try: provider=self.provider_factory(session['provider'],session['model'])
+                except (ValueError, KeyError):
+                    self.last_trace={'status':'error','stage':'provider_setup','error_code':'provider_unavailable'}
+                    raise ChatError('provider_unavailable') from None
+                if provider is None:
+                    self.last_trace={'status':'error','stage':'provider_setup','error_code':'provider_unavailable'}
+                    raise ChatError('provider_unavailable')
+                provider_setup_ms=max(0,int((time.monotonic()-provider_started)*1000))
             agent=ConversationAgent(snapshot,provider,review_submit=self.review_submit)
             if session['context'] is not None:
                 prior=session['context']
@@ -142,8 +223,28 @@ class ChatService:
                 if prior.policy_topic: hints.append('Política de referência: '+prior.policy_topic[:50])
                 if hints: agent.history[sid]=[{'role':'user','content':'; '.join(hints)}]
             answer=agent.answer(message,chat_id=sid)
+            timings=agent.last_trace.setdefault('timings_ms',{})
+            timings['snapshot']=snapshot_ms
+            timings['provider_setup']=provider_setup_ms
+            timings['end_to_end']=max(0,int((time.monotonic()-request_started)*1000))
+            self.last_trace=self._safe_trace(agent.last_trace)
             if agent.last_trace['status'] in {'error','tool_error','uncertain'}:
                 if agent.last_trace.get('error_type') == 'BudgetExhausted': raise ChatError('budget_exhausted')
                 raise ChatError('agent_unavailable')
-            self.store.save(sid,message,answer,agent.context.get(sid))
-            return {'answer':answer,'session':self.get(sid)}
+            persistence_started=time.monotonic()
+            persisted_message=agent.last_trace.get('persisted_user_message',redact_contact_details(message))
+            try:
+                self.store.save(sid,persisted_message,answer,agent.context.get(sid))
+            except ChatError as exc:
+                self.last_trace.update(status='error',stage='persistence',error_code=exc.code)
+                raise
+            try:
+                saved_session=self.get(sid)
+            except ChatError as exc:
+                self.last_trace=self._safe_trace(agent.last_trace)
+                self.last_trace.update(status='error',stage='session',error_code=exc.code)
+                raise
+            timings['persistence']=max(0,int((time.monotonic()-persistence_started)*1000))
+            timings['end_to_end']=max(0,int((time.monotonic()-request_started)*1000))
+            self.last_trace=self._safe_trace(agent.last_trace)
+            return {'answer':answer,'session':saved_session}

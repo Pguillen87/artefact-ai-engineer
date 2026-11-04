@@ -126,6 +126,39 @@ class ProviderFactoryTests(unittest.TestCase):
             self.assertEqual(state.usage()['calls'], 1)
             self.assertEqual(state.usage()['input_tokens'], 10)
             with self.assertRaises(BudgetExhausted): provider.request([{'role': 'user', 'content': 'hello'}])
+    def test_configured_google_provider_forwards_safe_response_metadata(self):
+        from types import SimpleNamespace
+        from artefact.provider import make_provider
+        from artefact.state import State
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            cfg = ProviderConfig(p/'config.db', p/'key')
+            cfg.save('google', 'gemini-3.5-flash-lite', api_key='fake')
+            text = '{"opening":"Oi.","next_step":"Quer ajuda?","evidence_refs":["E1"]}'
+            response = SimpleNamespace(
+                candidates=[SimpleNamespace(
+                    finish_reason='STOP',
+                    content=SimpleNamespace(parts=[SimpleNamespace(text=text)]),
+                )],
+                usage_metadata=SimpleNamespace(
+                    prompt_token_count=11, candidates_token_count=8, thoughts_token_count=3,
+                ),
+            )
+            class Models:
+                def generate_content(self, **_kwargs):
+                    return response
+            provider = make_provider(
+                cfg, 'google', 'gemini-3.5-flash-lite', State(p/'usage.db'),
+                client=SimpleNamespace(models=Models()),
+            )
+
+            provider.request([{'role': 'user', 'content': 'Use evidence E1.'}], final=True)
+
+            self.assertEqual(provider.last_response_metadata, {
+                'sdk_finish_reason': 'STOP',
+                'response_text_present': True,
+                'response_text_length': len(text),
+            })
     def test_factory_sanitizes_provider_failure(self):
         from artefact.provider import make_provider, ProviderError
         from artefact.state import State

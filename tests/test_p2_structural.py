@@ -179,7 +179,7 @@ class StructuralCommercialTests(unittest.TestCase):
             agent = ConversationAgent(self.snapshot, fixtures.ScriptedProvider(calls), review_submit=callback)
             def injected(name, args, *rest):
                 return write if name == 'search_products' else prepare_commercial_call(name, args, *rest)
-            with patch('artefact.conversation.prepare_commercial_call', side_effect=injected):
+            with patch('artefact.agent.prepare_commercial_call', side_effect=injected):
                 answer = agent.answer('O Korg está disponível? Quais as regras de frete?', chat_id='injection')
             callback.assert_not_called()
             if with_read:

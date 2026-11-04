@@ -9,6 +9,7 @@ from contextlib import closing
 from pathlib import Path
 
 from .session_store import ChatError, ChatService, SessionStore
+from .chat_limits import MAX_CHAT_REQUEST_BODY_BYTES
 from .bootstrap_secret import bootstrap_secret
 from .migrations import ensure_schema
 
@@ -44,7 +45,7 @@ def handler_for(service, token, *, provider_test=None):
                     if self.command=='DELETE': service.delete(parts[1]); return self.reply(200,{'deleted':True})
                 if self.command=='POST' and len(parts)==3 and parts[0]=='sessions' and parts[2]=='messages':
                     length=int(self.headers.get('Content-Length','0'))
-                    if length<1 or length>8192: raise ChatError('invalid_message')
+                    if length<1 or length>MAX_CHAT_REQUEST_BODY_BYTES: raise ChatError('invalid_message')
                     body=json.loads(self.rfile.read(length))
                     if not isinstance(body,dict): raise ChatError('invalid_message')
                     return self.reply(200,service.send(parts[1],body.get('message')))

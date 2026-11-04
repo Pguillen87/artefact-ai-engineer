@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -20,6 +21,21 @@ class ConversationTests(unittest.TestCase):
   self.assertIn('Olá',agent.answer('oi',chat_id=1));provider.request.assert_not_called()
   provider.request.side_effect=TimeoutError()
   self.assertIn('não consegui',agent.answer('Preço?',chat_id=1).lower())
+ def test_final_response_timeout_preserves_validated_product_facts(self):
+  from artefact.provider import ProviderError
+  class Provider:
+   def request(self,messages,final=False):
+    if final:
+     raise ProviderError('provider_timeout')
+    return {'output':[{'type':'function_call','name':'search_products',
+                       'arguments':'{"text":"Korg Synth"}','call_id':'search'}]}
+  agent=ConversationAgent(self.snapshot,Provider())
+  answer=agent.answer('Qual o preço do Korg Synth?',chat_id='final-timeout')
+  self.assertIn('Korg Synth',answer)
+  self.assertIn('R$ 1.127,50',answer)
+  self.assertEqual(agent.last_trace['status'],'success')
+  self.assertEqual(agent.last_trace['final_response_status'],'failed')
+  self.assertEqual(agent.last_trace['model_calls'][1]['error_code'],'provider_timeout')
  def test_repeated_calls_and_invented_facts_are_rejected(self):
   for output in [
    [{'type':'function_call','name':'policy','arguments':'{"topic":"pix"}','call_id':'1'},{'type':'function_call','name':'policy','arguments':'{"topic":"pix"}','call_id':'2'}],
@@ -123,14 +139,22 @@ class CompleteFlowTests(unittest.TestCase):
   with TemporaryDirectory() as d:
    root=Path(d);write_dataset(root)
    state=State(root/'runtime.db')
-   transport=Mock(return_value={'output':[{'type':'function_call','name':'policy','arguments':'{"topic":"pix"}','call_id':'call-1'}],'usage':{'input_tokens':10,'output_tokens':5}})
+   def respond(body):
+    if body['tool_choice'] == 'none':
+     facts=json.loads(body['input'][0]['content'])['evidence'][0]['validated_facts']
+     answer=json.dumps({'opening':'Separei as informações para você.','next_step':'Quer ajuda com mais alguma coisa?','evidence_refs':['E1']},ensure_ascii=False)
+     return {'output':[{'type':'message','content':[{'type':'output_text','text':answer}]}],
+             'usage':{'input_tokens':10,'output_tokens':5}}
+    return {'output':[{'type':'function_call','name':'policy','arguments':'{"topic":"pix"}','call_id':'call-1'}],
+            'usage':{'input_tokens':10,'output_tokens':5}}
+   transport=Mock(side_effect=respond)
    provider=ResponsesProvider('dummy','gpt-6-luna',state,Decimal('1'),2,Decimal('0.1'),Decimal('0.5'),transport=transport)
    send=Mock();adapter=TelegramAdapter(ConversationAgent(load_dataset(root),provider),send,state)
    update={'update_id':100,'message':{'chat':{'id':10,'type':'private'},'text':'Qual desconto Pix?'}}
    adapter.handle(update);TelegramAdapter(ConversationAgent(load_dataset(root),provider),send,state).handle(update)
    self.assertEqual(send.call_count,1);self.assertIn('5%',send.call_args.args[1])
-   self.assertEqual(state.usage()['calls'],1);self.assertEqual(state.usage()['input_tokens'],10)
-   self.assertEqual(transport.call_count,1)
+   self.assertEqual(state.usage()['calls'],2);self.assertEqual(state.usage()['input_tokens'],20)
+   self.assertEqual(transport.call_count,2)
 
 class ContradictionTests(unittest.TestCase):
  def test_unconfirmed_order_payment_cannot_be_asserted(self):
@@ -189,17 +213,25 @@ class ThreeMockedJourneysTests(unittest.TestCase):
    ('Qual desconto Pix?', 'policy', '{"topic":"pix"}', 'O Pix dá 5% sem acumular com promoção.'),
    ('Meu nome é Synthetic Customer, meu pedido?', 'orders', '{"full_name":"Synthetic Customer"}', 'O pedido registra total 1127.50.')]
   with TemporaryDirectory() as d:
-   root=Path(d);write_dataset(root);state=State(root/'usage.db');wire=[]
-   for _,name,args,answer in sequences:
-    wire.append({'output':[{'type':'function_call','name':name,'arguments':args,'call_id':'call'}]})
-   transport=Mock(side_effect=wire);send=Mock()
+   root=Path(d);write_dataset(root);state=State(root/'usage.db')
+   wire=iter({'output':[{'type':'function_call','name':name,'arguments':args,'call_id':'call'}],
+              'usage':{'input_tokens':10,'output_tokens':5}}
+             for _,name,args,_ in sequences)
+   def respond(body):
+    if body['tool_choice'] == 'none':
+     facts=json.loads(body['input'][0]['content'])['evidence'][0]['validated_facts']
+     answer=json.dumps({'opening':'Separei as informações para você.','next_step':'Quer ajuda com mais alguma coisa?','evidence_refs':['E1']},ensure_ascii=False)
+     return {'output':[{'type':'message','content':[{'type':'output_text','text':answer}]}],
+             'usage':{'input_tokens':10,'output_tokens':5}}
+    return next(wire)
+   transport=Mock(side_effect=respond);send=Mock()
    provider=ResponsesProvider('dummy','model',state,Decimal('1'),6,Decimal('0.1'),Decimal('0.5'),transport=transport)
    adapter=TelegramAdapter(ConversationAgent(load_dataset(root),provider),send,state)
    for index,(question,_,__,___) in enumerate(sequences):
     adapter.handle({'update_id':index,'message':{'chat':{'id':index+1,'type':'private'},'text':question}})
    self.assertEqual(send.call_count,3)
    self.assertTrue(all('não consegui' not in call.args[1].lower() for call in send.call_args_list))
-   self.assertEqual(state.usage()['calls'],3)
+   self.assertEqual(state.usage()['calls'],6)
 
 class LocaleEvidenceTests(unittest.TestCase):
  def test_brl_format_is_compared_numerically_to_tool_evidence(self):
@@ -251,10 +283,12 @@ class FieldBindingTests(unittest.TestCase):
   self.assertIn('Previsão de entrega cadastrada: 2026-01-03',result)
   self.assertIn('Código de rastreamento cadastrado: TEST123',result)
   self.assertIn('Data efetiva de entrega não informada',result)
- def test_oversized_rendered_response_is_not_silently_truncated(self):
+ def test_answer_above_3500_characters_is_preserved_below_the_shared_limit(self):
   from test_data import write_dataset
   with TemporaryDirectory() as d:
    root=Path(d);write_dataset(root,{'products':{'name':'Korg '+('x'*3600)}})
    provider=Mock();provider.request.return_value={'output':[{'type':'function_call','name':'search_products','arguments':'{"text":"Korg"}','call_id':'x'}]}
    answer=ConversationAgent(load_dataset(root),provider).answer('Korg?',chat_id=1)
-   self.assertIn('refine sua consulta',answer)
+   self.assertGreater(len(answer),3500)
+   self.assertIn('x'*3600,answer)
+   self.assertNotIn('refine sua consulta',answer)

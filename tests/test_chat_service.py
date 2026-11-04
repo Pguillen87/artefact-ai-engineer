@@ -17,6 +17,10 @@ class ChatTests(unittest.TestCase):
  def test_restart_version_and_privacy(self):
   session=self.service.create(); sid=session['id']
   self.assertIn('Korg',self.service.send(sid,'Preço Korg?')['answer'])
+  timings=self.service.last_trace['timings_ms']
+  for stage in ('snapshot','interpretation','execution','final_response','persistence','end_to_end'):
+   self.assertIsInstance(timings[stage],int)
+   self.assertGreaterEqual(timings[stage],0)
   from artefact.session_store import SessionStore, ChatService
   again=ChatService(SessionStore(self.root/'chat.db'),lambda version:self.snapshot,lambda p,m:self.provider,lambda:2,lambda:('openai','other'))
   self.assertEqual(again.get(sid)['dataset_version'],1)
@@ -28,6 +32,18 @@ class ChatTests(unittest.TestCase):
   sid=self.service.create()['id']; self.provider.request.side_effect=TimeoutError('secret')
   with self.assertRaises(Exception): self.service.send(sid,'Preço Korg?')
   self.assertEqual(self.service.get(sid)['messages'],[])
+
+class ChatSizeTests(unittest.TestCase):
+ def test_64k_assistant_answer_persists_without_truncation(self):
+  from artefact.session_store import ChatError, SessionStore
+  with TemporaryDirectory() as directory:
+   store=SessionStore(Path(directory)/'chat.db');sid=store.create(1,'google','model')['id']
+   answer='x'*(64*1024)
+   store.save(sid,'Pergunta?',answer,None)
+   saved=store.get(sid)['messages']
+   self.assertEqual(saved[1]['content'],answer)
+   with self.assertRaises(ChatError): store.save(sid,'Outra?',answer+'x',None)
+   self.assertEqual(len(store.get(sid)['messages']),2)
 
 class ChatHTTPTests(ChatTests):
  def test_authenticated_api(self):
@@ -49,7 +65,7 @@ class ConcurrencyTests(ChatTests):
  def test_simultaneous_turns_do_not_overwrite(self):
   import concurrent.futures, time
   sid=self.service.create()['id']
-  def reply(messages):
+  def reply(messages, final=False):
    time.sleep(.05)
    return {'output':[]}
   self.provider.request.side_effect=reply
@@ -75,6 +91,21 @@ class MinimizedContextTests(ChatTests):
   sent=str(self.provider.request.call_args.args[0])
   self.assertIn('Korg Synth',sent)
   self.assertNotIn('fake@example.invalid',sent)
+
+class PendingCatalogPersistenceTests(ChatTests):
+ def test_pending_search_and_shown_ids_survive_service_restart(self):
+  sid=self.service.create()['id']
+  first=self.service.send(sid,'Quais teclados vocês têm?')
+  self.assertIn('Korg Synth',first['answer'])
+  stored=self.store.get(sid)['context']
+  self.assertEqual(stored.pending_search.shown_ids,(1,))
+  self.assertEqual(stored.pending_search.page_ids,(1,))
+  from artefact.session_store import SessionStore, ChatService
+  restarted=ChatService(SessionStore(self.root/'chat.db'),lambda _:self.snapshot,
+                        lambda p,m:self.provider,lambda:2,lambda:('google','new'))
+  detail=restarted.send(sid,'o primeiro')['answer']
+  self.assertIn('Korg Synth',detail)
+  self.assertIn('detalhes técnicos precisam de confirmação',detail)
 
 class BudgetFailureTests(ChatTests):
  def test_budget_exhaustion_is_reported_without_saving_turn(self):

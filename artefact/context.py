@@ -19,9 +19,32 @@ class ConversationContext:
     turn: int = 0
     origin: str = 'user'
     customer_id: int | None = None
+    customer_contact_matched: bool = False
+    pending_order_id: int | None = None
+    pending_order_lookup: bool = False
     policy_topic: str | None = None
     commercial: CommercialBasis | None = None
     awaiting_budget: bool = False
+    pending_search: PendingCatalogSearch | None = None
+
+
+@dataclass(frozen=True)
+class PendingCatalogSearch:
+    """Only the validated filters and visible IDs needed to resume a catalog query."""
+    category: str | None = None
+    text: str | None = None
+    brand: str | None = None
+    model: str | None = None
+    features: tuple[str, ...] = ()
+    min_price: Decimal | None = None
+    max_price: Decimal | None = None
+    available_only: bool = True
+    excluded_ids: tuple[int, ...] = ()
+    shown_ids: tuple[int, ...] = ()
+    page_ids: tuple[int, ...] = ()
+    selected_id: int | None = None
+    more_available: bool = False
+    no_result_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -267,28 +290,78 @@ def order_followup(text: str) -> bool:
                 not re.search(r'\b(?:meu nome|me chamo|sou|outro cliente)\b', spoken))
 
 
-def name_in_text(text: str, name: str) -> bool:
-    suffix = r'(?=$|[.,!?;:]|\s+(?:e|pedido|pedidos|meu|meus|quero|qual|veja|por favor|pode)\b)'
-    spoken = normalize(text)
-    if re.search(r'\b(?:nao sou|nao me chamo|outro cliente)\b', spoken):
-        return False
-    return bool(re.search(r'(?<!\w)' + re.escape(normalize(name)) + suffix, spoken))
+_EMAIL = re.compile(r"(?<![\w.+-])[\w.!#$%&'*+/=?^_`{|}~-]+@[\w.-]+\.[A-Za-z]{2,}(?![\w-])")
+_PHONE = re.compile(r'(?<!\w)(?:\+?55[\s().-]*)?(?:\(?\d{2}\)?[\s.-]*)?(?:9[\s.-]?\d{4}|\d{4})[\s.-]?\d{4}(?!\w)')
 
 
-def explicit_customer(text: str, snapshot) -> int | None:
-    """Store only an ID for an explicit unique self-identification in fictional data."""
+def _phone_key(value: str) -> str | None:
+    digits = re.sub(r'\D', '', value)
+    if digits.startswith('55') and len(digits) in {12, 13}:
+        digits = digits[2:]
+    return digits if len(digits) in {10, 11} else None
+
+
+def has_customer_contact(text: str) -> bool:
+    return bool(_EMAIL.search(text) or any(_phone_key(match.group()) for match in _PHONE.finditer(text)))
+
+
+def redact_contact_details(text: str) -> str:
+    """Remove email addresses and Brazilian phone numbers before persistence/model use."""
+    redacted = _EMAIL.sub('[e-mail omitido]', text)
+    return _PHONE.sub(lambda match: '[telefone omitido]' if _phone_key(match.group()) else match.group(), redacted)
+
+
+def redact_customer_names(text: str, snapshot) -> str:
+    """Remove names found in the demo customer table before persistence/model use."""
+    if snapshot is None:
+        return text
+    parts = {part for row in snapshot.tables['customers']
+             for value in (row['name'], normalize(row['name']))
+             for part in value.split() if len(normalize(part)) >= 4}
+    names = {value for row in snapshot.tables['customers']
+             for value in (row['name'], normalize(row['name']))}
+    redacted = text
+    for value in sorted(names | parts, key=len, reverse=True):
+        pattern = r'(?<!\w)' + re.escape(value) + r'(?!\w)'
+        redacted = re.sub(pattern, '[nome omitido]', redacted, flags=re.I)
+    return redacted
+
+
+def customer_id_for_contact(text: str, snapshot) -> int | None:
+    """Match registered contact data; this demo does not prove control of that contact."""
     if snapshot is None:
         return None
-    spoken = normalize(text)
-    if re.search(r'\b(?:nao sou|nao me chamo|outro cliente)\b', spoken):
+    contact_sets = []
+    for match in _EMAIL.finditer(text):
+        key = match.group().casefold()
+        contact_sets.append({customer['customer_id'] for customer in snapshot.tables['customers']
+                             if isinstance(customer.get('email'), str) and customer['email'].strip().casefold() == key})
+    for match in _PHONE.finditer(text):
+        key = _phone_key(match.group())
+        if key:
+            contact_sets.append({customer['customer_id'] for customer in snapshot.tables['customers']
+                                 if isinstance(customer.get('phone'), str) and _phone_key(customer['phone']) == key})
+    if not contact_sets:
         return None
-    matches = []
+    matches = set.intersection(*contact_sets)
+    return next(iter(matches)) if len(matches) == 1 else None
+
+
+def is_customer_identity_attempt(text: str, snapshot) -> bool:
+    """Recognize an identity reply only to keep it away from the model; it grants no access."""
+    spoken = normalize(text)
+    if re.search(r'\b(?:meu nome|me chamo|sou|email|e-mail|telefone|celular|cadastro)\b', spoken):
+        return True
+    if snapshot is None:
+        return False
     for customer in snapshot.tables['customers']:
-        name = normalize(customer['name'])
-        suffix = r'(?=$|[.,!?;:]|\s+(?:e|pedido|pedidos|meu|meus|quero|qual|veja|por favor|pode)\b)'
-        if len(name.split()) >= 2 and re.search(r'\b(?:meu nome(?: completo)? (?:e|eh)|me chamo|sou)\s+' + re.escape(name) + suffix, spoken):
-            matches.append(customer['customer_id'])
-    return matches[0] if len(matches) == 1 else None
+        name_parts = normalize(customer['name']).split()
+        if re.search(r'(?<!\w)' + re.escape(normalize(customer['name'])) + r'(?!\w)', spoken):
+            return True
+        if len(spoken.split()) <= 4 and any(len(part) >= 4 and re.search(
+                r'(?<!\w)' + re.escape(part) + r'(?!\w)', spoken) for part in name_parts):
+            return True
+    return False
 
 
 def product_installment_followup(text: str) -> bool:
@@ -308,6 +381,27 @@ def explicit_order_id(text: str) -> int | None:
     return int(next(iter(unique))) if len(unique) == 1 else None
 
 
+def order_lookup_requested(text: str) -> bool:
+    spoken = normalize(text)
+    if (explicit_order_id(text) is not None or re.search(r'\bmeus? pedidos\b', spoken) or
+            re.search(r'\b(?:meu|minha)\s+(?:pedido|encomenda)\b', spoken)):
+        return True
+    return bool(re.search(r'\b(?:pedido|pedidos|encomenda|encomendas)\b', spoken) and
+                re.search(r'\b(?:consult\w*|status|rastre\w*|acompan\w*|andamento|onde|quero saber|ver)\b', spoken))
+
+
+def local_order_lookup_requested(text: str, previous: ConversationContext | None, snapshot) -> bool:
+    if order_lookup_requested(text):
+        return True
+    spoken = normalize(text)
+    order_word = bool(re.search(r'\b(?:pedido|pedidos|encomenda|encomendas)\b', spoken))
+    if order_word and is_customer_identity_attempt(text, snapshot):
+        return True
+    return bool(previous and previous.pending_order_lookup and
+                (has_customer_contact(text) or is_customer_identity_attempt(text, snapshot) or
+                 re.fullmatch(r'(?:pedido\s*)?#?\s*\d+', spoken)))
+
+
 def explicit_product(text: str, snapshot):
     """Resolve a unique affirmative catalog reference, including abbreviations."""
     if snapshot is None:
@@ -320,9 +414,46 @@ def explicit_product(text: str, snapshot):
 def next_context(text: str, previous: ConversationContext | None, turn: int) -> ConversationContext:
     """Retain only bounded references; commercial meaning belongs to the resolver."""
     if previous and order_followup(text):
-        return ConversationContext(turn=turn, customer_id=previous.customer_id)
+        return ConversationContext(turn=turn,
+                                   customer_id=previous.customer_id if previous.customer_contact_matched else None,
+                                   customer_contact_matched=previous.customer_contact_matched)
     if previous and previous.policy_topic == 'pix' and pix_policy_followup(text):
         return ConversationContext(turn=turn, policy_topic='pix')
     if previous and (_FOLLOWUP.fullmatch(text) or product_followup(text) or product_installment_followup(text)):
         return replace(previous, turn=turn)
+    if previous and previous.pending_search and pending_catalog_followup(text):
+        return replace(previous, turn=turn)
     return ConversationContext(turn=turn)
+
+
+def pending_catalog_followup(text: str) -> bool:
+    spoken = normalize(text)
+    if complete_catalog_list_request(text) or more_catalog_list_request(text):
+        return True
+    if re.fullmatch(r'(?:nao quero esse|nao quero este|tem outro|tem outra|algum outro|alguma outra|prefiro outro|prefiro outra)(?:\s+tem\s+outro)?', spoken):
+        return True
+    if re.fullmatch(r'(?:o|a)\s+(?:primeir[oa]|segund[oa]|terceir[oa]|quart[oa]|quint[oa]|sext[oa]|'
+                    r'setim[oa]|oitav[oa]|non[oa]|decim[oa])', spoken):
+        return True
+    if re.fullmatch(r'(?:ate|no maximo|abaixo de|menos de)?\s*(?:r\$\s*)?[0-9][0-9.,]*(?:\s+reais)?[.!]?', spoken):
+        return True
+    words = spoken.split()
+    ignored = {'e', 'de', 'do', 'da', 'um', 'uma', 'o', 'a', 'sim', 'nao', 'ok',
+               'quais', 'qual', 'que', 'voces', 'tem', 'venda', 'vender'}
+    return 1 <= len(words) <= 5 and not set(words).issubset(ignored) and not set(words).intersection({'quais', 'qual'})
+
+
+def complete_catalog_list_request(text: str) -> bool:
+    spoken = normalize(text)
+    return bool(re.search(
+        r'\b(?:lista completa|todos os produtos|todos os modelos|todas as opcoes|todas as alternativas)\b',
+        spoken))
+
+
+def more_catalog_list_request(text: str) -> bool:
+    spoken = normalize(text)
+    return bool(re.fullmatch(
+        r'(?:mais(?:\s+(?:opcoes|produtos|modelos))?|continu\w*|ver mais|mostra mais|mostre mais|'
+        r'proximos?|outra pagina|o restante|mostra o restante|mostre o restante|'
+        r'(?:mostre|quero ver|ver)\s+outras?\s+opcoes(?:\s+de\s+.+)?|'
+        r'outras?\s+opcoes(?:\s+de\s+.+)?)', spoken))

@@ -92,12 +92,144 @@ def _render_installment_quote(quote):
     return answer
 
 
+def _render_local_shipping_quote(quote):
+    if not isinstance(quote, dict):
+        raise ValueError('invalid local shipping quote')
+    delivery = quote.get('delivery')
+    if delivery is not None:
+        if (not isinstance(delivery, dict) or delivery.get('destination') != 'Campo Grande/MS' or
+                type(delivery.get('minimum_business_days')) is not int or
+                type(delivery.get('maximum_business_days')) is not int or
+                delivery['minimum_business_days'] < 1 or
+                delivery['maximum_business_days'] < delivery['minimum_business_days'] or
+                type(delivery.get('date_guaranteed')) is not bool):
+            raise ValueError('invalid local delivery policy')
+    if quote.get('status') == 'clarification':
+        prompts = {
+            'destination': 'Qual é a cidade/UF ou o CEP de entrega? A cotação local automática cobre Campo Grande/MS.',
+            'product_and_destination': 'Para cotar, informe o nome/modelo do instrumento e o CEP de entrega. A cotação local automática cobre Campo Grande/MS.',
+            'product_missing': 'Qual é o nome ou modelo do instrumento que deseja cotar?',
+            'product_ambiguous': 'Não consegui identificar um produto exato nesta consulta. Confirme o nome ou modelo que deseja cotar.',
+            'price_basis': 'O valor informado diverge do preço efetivo do catálogo. Quer que eu calcule com o preço cadastrado?',
+            'product_unavailable': 'Esse produto está indisponível para venda no snapshot, então não calculei o frete. Qual outro modelo você quer consultar?',
+            'price_unavailable': 'Não encontrei um preço efetivo confiável para esse produto no catálogo. Confirme o preço com a loja antes de calcular o frete.',
+        }
+        reason = quote.get('reason')
+        if reason not in prompts:
+            raise ValueError('unknown shipping clarification')
+        if reason == 'destination' and isinstance(quote.get('product_name'), str):
+            lines = [f"Para cotar o frete de {quote['product_name']}, qual é o CEP de entrega? "
+                     'A cotação automática cobre Campo Grande/MS; outros destinos precisam de cotação da loja.']
+        else:
+            lines = [prompts[reason]]
+    elif quote.get('status') == 'quoted':
+        name = quote.get('product_name')
+        destination = quote.get('destination')
+        price_basis = quote.get('price_basis')
+        if (not isinstance(name, str) or destination != 'Campo Grande/MS' or
+                price_basis not in {'promotion_in_snapshot', 'catalog_checkout'}):
+            raise ValueError('invalid local shipping quote details')
+        product_price = Decimal(str(quote.get('product_price_brl')))
+        freight = Decimal(str(quote.get('freight_brl')))
+        total = Decimal(str(quote.get('total_brl')))
+        if (any(not amount.is_finite() or amount < 0 or amount != amount.quantize(Decimal('0.01'))
+                for amount in (product_price, freight, total)) or total != product_price + freight):
+            raise ValueError('invalid local shipping amounts')
+        basis = ('Preço promocional registrado no snapshot' if price_basis == 'promotion_in_snapshot'
+                 else 'Preço efetivo de checkout registrado no catálogo')
+        lines = [f'{name}: {basis} {_money(product_price)}.',
+                 f'Frete para {destination}: {_money(freight)}.',
+                 f'Total estimado do item com frete: {_money(total)}.']
+    else:
+        raise ValueError('unknown local shipping quote status')
+    if (delivery is not None and quote.get('status') == 'quoted') or (
+            delivery is not None and quote.get('status') == 'clarification' and
+            quote.get('reason') in {'product_missing', 'product_ambiguous', 'price_basis', 'product_unavailable', 'price_unavailable'}):
+        days = (f"{delivery['minimum_business_days']} a {delivery['maximum_business_days']} dias úteis")
+        qualifier = '' if delivery['date_guaranteed'] else '; a data exata não é garantida'
+        lines.append(f"Prazo normal para {delivery['destination']}: {days}{qualifier}.")
+    return lines
+
+
+def _render_catalog_overview(data):
+    if not isinstance(data, dict):
+        raise ValueError('invalid catalog overview')
+    categories = data.get('categories')
+    examples = data.get('examples')
+    if not isinstance(categories, (list, tuple)) or not isinstance(examples, (list, tuple)) or len(examples) > 3:
+        raise ValueError('invalid catalog overview')
+    lines = ['No catálogo, há estas categorias com produtos disponíveis:']
+    for category in categories:
+        if (not isinstance(category, dict) or not isinstance(category.get('name'), str) or
+                type(category.get('available_count')) is not int or category['available_count'] <= 0):
+            raise ValueError('invalid catalog category')
+        count = category['available_count']
+        lines.append(f"• {category['name']}: {count} produto{'s' if count != 1 else ''} disponível{'is' if count != 1 else ''}.")
+    if examples:
+        lines.append('Alguns exemplos e seus preços registrados:')
+        seen = set()
+        for item in examples:
+            category_id = item.get('category_id') if isinstance(item, dict) else None
+            if (type(category_id) is not int or category_id in seen or
+                    not isinstance(item.get('category_name'), str) or not isinstance(item.get('name'), str) or
+                    item.get('available') is not True or not isinstance(item.get('price_quote'), dict)):
+                raise ValueError('invalid catalog example')
+            seen.add(category_id)
+            quote = item['price_quote']
+            effective = quote.get('checkout_price_brl')
+            if effective is None:
+                raise ValueError('catalog example has no price')
+            lines.append(f"• {item['name']} ({item['category_name']}): {_money(effective)}.")
+            if quote.get('status') == 'active_in_snapshot':
+                lines.append('  Promoção registrada no snapshot; a vigência atual não foi confirmada.')
+    else:
+        lines.append('Não há exemplos com preço disponível no cadastro atual.')
+    lines.append('Que tipo de instrumento ou categoria te interessa?')
+    return '\n'.join(lines)
+
+
+def _render_product_detail(item):
+    if (not isinstance(item, dict) or not isinstance(item.get('name'), str) or
+            type(item.get('stock_quantity')) is not int or type(item.get('available')) is not bool):
+        raise ValueError('invalid product detail')
+    if item.get('price_withheld'):
+        lines = [f"{item['name']}: detalhes comerciais ocultos conforme sua solicitação."]
+        availability = 'disponível' if item['available'] else 'indisponível'
+        lines.append(f"Disponibilidade: {availability} no cadastro, estoque registrado de {item['stock_quantity']} unidade(s).")
+    else:
+        quote = item.get('price_quote')
+        lines = [_render_price_quote(item['name'], quote, item['available'])]
+        availability = 'disponível' if item['available'] else 'indisponível'
+        lines.append(f"Disponibilidade: {availability} no cadastro, estoque registrado de {item['stock_quantity']} unidade(s).")
+    specs = item.get('specs')
+    if not isinstance(specs, dict):
+        raise ValueError('invalid product specifications')
+    safe_specs = []
+    for key, value in specs.items():
+        if not isinstance(key, str) or not isinstance(value, (str, int, Decimal)) or isinstance(value, bool):
+            continue
+        label = key.replace('_', ' ').strip()
+        rendered = str(value).replace('\r', ' ').replace('\n', ' ').strip()
+        if label and rendered and len(label) <= 40 and len(rendered) <= 100:
+            safe_specs.append(f'{label}: {rendered}')
+    if safe_specs:
+        lines.append('Especificações cadastradas: ' + '; '.join(safe_specs) + '.')
+    elif item.get('review_fields'):
+        lines.append('Os detalhes técnicos precisam de confirmação com um vendedor.')
+    return '\n'.join(lines)
+
+
 def render_results(results):
     lines=[]
     status_labels={'pending':'pendente','confirmed':'confirmado','shipped':'enviado','delivered':'entregue','cancelled':'cancelado'}
     for entry in results:
         name=entry['consulta'];data=entry['resultado']
-        if name in ('search_products','recommend_products','cheapest_product'):
+        if name == 'catalog_overview':
+            lines.append(_render_catalog_overview(data))
+        elif name == 'product_detail':
+            if data is not None:
+                lines.append(_render_product_detail(data))
+        elif name in ('search_products','recommend_products','cheapest_product'):
             if not isinstance(data,list): raise ValueError('invalid products')
             search_context = entry.get('search_context')
             if not data and search_context is not None and name in {'search_products', 'recommend_products'}:
@@ -129,6 +261,10 @@ def render_results(results):
                 else:
                     subject = 'produtos para os filtros informados'
                 lines.append(f'Não encontrei {subject}{limit} nesta consulta ao catálogo.')
+                if search_context.get('no_result_count', 0) >= 2:
+                    lines.append('Ainda não encontrei opções com esses filtros. Quer que eu peça ajuda a um vendedor para verificar o catálogo?')
+                else:
+                    lines.append('Qual filtro você gostaria de alterar? Só amplio a busca depois da sua confirmação.')
                 continue
             if name == 'recommend_products' and data: lines.append('Alternativas disponíveis:')
             for item in data:
@@ -192,7 +328,12 @@ def render_results(results):
                 else:
                     lines.append('Data efetiva de entrega não informada; o status cadastrado não comprova o recebimento físico.')
         elif name=='policy':
-            if data is not None: lines.append(data['summary'])
+            if data is not None:
+                local_quote = data.get('local_quote')
+                if local_quote is None:
+                    lines.append(data['summary'])
+                else:
+                    lines.extend(_render_local_shipping_quote(local_quote))
         elif name=='price_mismatch':
             if not isinstance(data,dict) or not isinstance(data.get('product_name'),str):
                 raise ValueError('invalid price mismatch')

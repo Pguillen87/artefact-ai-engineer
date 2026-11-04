@@ -35,12 +35,14 @@ class CommercialConversationFlowTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
 
-    def _answer(self, question, changes=None, extra=None, *calls):
+    def _answer(self, question, changes=None, extra=None, *calls, expected_calls=None):
         write_dataset(self.root, changes, extra)
         snapshot = load_dataset(self.root)
         provider = SyntheticProvider(*calls)
         answer = ConversationAgent(snapshot, provider).answer(question, chat_id=10)
-        self.assertEqual(provider.request_count, 1)
+        self.assertLessEqual(provider.request_count, 2)
+        if expected_calls is not None:
+            self.assertEqual(provider.request_count, expected_calls)
         return answer
 
     def test_product_search_renders_original_and_calculated_promotional_price(self):

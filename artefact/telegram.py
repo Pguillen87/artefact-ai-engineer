@@ -6,6 +6,29 @@ import urllib.request
 class TelegramError(RuntimeError):
     pass
 
+
+def _message_chunks(text, limit=4000):
+    """Split long answers at paragraph/line boundaries without dropping text."""
+    if not isinstance(text, str):
+        raise TelegramError('Telegram message must be text')
+    chunks = []
+    remaining = text
+    while len(remaining) > limit:
+        split_at = remaining.rfind('\n\n', 0, limit - 1)
+        delimiter = 2
+        if split_at < limit // 2:
+            split_at = remaining.rfind('\n', 0, limit - 1)
+            delimiter = 1
+        if split_at < limit // 2:
+            split_at = remaining.rfind(' ', 0, limit - 1)
+            delimiter = 1
+        split_at = limit if split_at < 0 else split_at + delimiter
+        chunks.append(remaining[:split_at])
+        remaining = remaining[split_at:]
+    if remaining or not chunks:
+        chunks.append(remaining)
+    return tuple(chunks)
+
 class TelegramClient:
     def __init__(self, token, transport=None):
         if not token: raise ValueError('TELEGRAM_BOT_TOKEN required')
@@ -37,4 +60,6 @@ class TelegramClient:
         return result
 
     def send(self, chat_id, text):
-        return self._call('sendMessage',{'chat_id':chat_id,'text':text[:4000]})
+        results = [self._call('sendMessage', {'chat_id':chat_id, 'text':chunk})
+                   for chunk in _message_chunks(text)]
+        return results[0] if len(results) == 1 else results[-1]

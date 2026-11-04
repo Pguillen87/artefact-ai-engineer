@@ -50,6 +50,16 @@ class TelegramClientTests(unittest.TestCase):
   client=TelegramClient('secret',transport=Mock(return_value={'ok':False}))
   with self.assertRaises(TelegramError) as exc:client.get_updates(0)
   self.assertNotIn('secret',str(exc.exception))
+ def test_long_answers_are_delivered_as_complete_nontruncated_chunks(self):
+  from artefact.telegram import TelegramClient
+  transport=Mock(return_value={'ok':True,'result':{}})
+  client=TelegramClient('dummy',transport=transport)
+  text=('produto e condições cadastradas\n\n'+'x'*3990+' preço e disponibilidade\n'+'y'*5000)
+  client.send(12,text)
+  chunks=[call.args[1]['text'] for call in transport.call_args_list]
+  self.assertGreater(len(chunks),1)
+  self.assertTrue(all(len(chunk)<=4000 for chunk in chunks))
+  self.assertEqual(''.join(chunks),text)
 
 class RuntimeTests(unittest.TestCase):
  def test_runtime_requires_explicit_egress_and_credentials(self):
