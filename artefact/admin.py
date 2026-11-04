@@ -15,7 +15,14 @@ from .data import SCHEMAS, Snapshot, StructuralError, _freeze, _parse, _scan
 
 MAX_BYTES = 1024 * 1024
 MAX_ROWS = 1000
-DEFAULT_SELLER_CONTACT = '(67) 3341-4444'
+DEFAULT_SELLER_CONTACT = '(00) 90000-0000'
+DEFAULT_SELLER_NAME = ''
+
+
+def _validate_seller_name(value):
+    if not isinstance(value, str) or len(value) > 120 or any(ord(c) < 32 or ord(c) == 127 or c in '<>' for c in value):
+        raise ValueError('Nome do vendedor inválido; use até 120 caracteres sem marcação')
+    return value.strip()
 
 
 def _validate_contact(value):
@@ -111,11 +118,13 @@ def published_snapshot(path, baseline):
         exists=con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='public_settings'").fetchone()
         setting=con.execute("SELECT value FROM public_settings WHERE key='seller_contact'").fetchone() if exists else None
         contact=_validate_contact(setting[0]) if setting else DEFAULT_SELLER_CONTACT
+        name=con.execute("SELECT value FROM public_settings WHERE key='seller_name'").fetchone() if exists else None
+        seller_name=_validate_seller_name(name[0]) if name else DEFAULT_SELLER_NAME
         products = _parse('products', row[0])
         tables = dict(baseline.tables)
         tables['products'] = tuple(baseline.tables['products']) + tuple(_freeze(p) for p in products)
         issues = baseline.issues + _scan(products, baseline.tables['categories'])
-        return Snapshot(MappingProxyType(tables), issues, baseline.hashes, contact, row[1])
+        return Snapshot(MappingProxyType(tables), issues, baseline.hashes, contact, row[1], seller_name)
     finally:
         con.close()
 
@@ -235,6 +244,27 @@ class CatalogAdmin:
         with _connect(self.serving_path) as con:
             row=con.execute("SELECT value FROM public_settings WHERE key='seller_contact'").fetchone()
             return _validate_contact(row[0]) if row else DEFAULT_SELLER_CONTACT
+
+    def seller_name(self):
+        with _connect(self.serving_path) as con:
+            row=con.execute("SELECT value FROM public_settings WHERE key='seller_name'").fetchone()
+            return _validate_seller_name(row[0]) if row else DEFAULT_SELLER_NAME
+
+    def set_seller(self, name, contact):
+        name=_validate_seller_name(name)
+        contact=_validate_contact(contact)
+        con=self._transaction()
+        try:
+            previous=dict(con.execute("SELECT key,value FROM public_settings WHERE key IN ('seller_name','seller_contact')"))
+            con.executemany('INSERT INTO public_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                            [('seller_name',name),('seller_contact',contact)])
+            reason=json.dumps({'before':{'name':previous.get('seller_name',DEFAULT_SELLER_NAME),'contact':previous.get('seller_contact',DEFAULT_SELLER_CONTACT)},
+                               'after':{'name':name,'contact':contact}},ensure_ascii=False)
+            con.execute("INSERT INTO admin.events(action,reason) VALUES('seller',?)",(reason,))
+            con.commit()
+        except BaseException:
+            con.rollback();raise
+        finally: con.close()
 
     def set_seller_contact(self, contact):
         contact=_validate_contact(contact)

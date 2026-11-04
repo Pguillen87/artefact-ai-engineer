@@ -372,7 +372,8 @@ class Agent:
                         return CLARIFY
                     result=get_policy(args['topic'])
                     if args['topic']=='contacts' and result is not None:
-                        result['summary']='Demonstração: atendimento remoto (67) 3321-4500; contato da loja física/vendedores '+self.snapshot.seller_contact+'.'
+                        seller=(self.snapshot.seller_name+' — ') if self.snapshot.seller_name else ''
+                        result['summary']='Demonstração: atendimento remoto; contato da loja física/vendedores '+seller+self.snapshot.seller_contact+'.'
                 elif name=='request_technical_review' and set(args)=={'product_id','field','reason'}:
                     pid=args['product_id']; field=args['field']; reason=args['reason']
                     if self.review_submit is None or type(pid) is not int or not isinstance(field,str) or not isinstance(reason,str): return FALLBACK

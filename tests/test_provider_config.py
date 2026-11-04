@@ -41,6 +41,71 @@ class ProviderConfigTests(unittest.TestCase):
         self.master.unlink()
         with self.assertRaises(ValueError): ProviderConfig(self.db, self.master)
 
+    def test_partial_save_preserves_existing_limits_key_and_consumption(self):
+        from artefact.state import State
+        state = State(Path(self.temp.name)/'usage.db')
+        self.config.save('openai', 'gpt-4.1-mini', 'saved-key', max_calls=23,
+                         max_usd='2.4', input_price='0.15', output_price='0.6')
+        self.config.test_connection('openai', state, transport=lambda body: {
+            'output': [], 'usage': {'input_tokens': 10, 'output_tokens': 4}})
+        before = state.usage()
+        self.config.save_partial('openai', 'gpt-4.1-nano')
+        self.assertEqual(self.config.credentials('openai'), 'saved-key')
+        saved = self.config.status()['providers']['openai']
+        self.assertEqual([saved[k] for k in ('max_calls','max_usd','input_price','output_price')],
+                         [23, '2.4', '0.15', '0.6'])
+        self.assertEqual(state.usage(), before)
+        self.assertFalse(saved['verified'])
+        self.config.save_partial('openai', 'gpt-4.1-nano', max_usd='3.5')
+        self.assertEqual(self.config.status()['providers']['openai']['max_usd'], '3.5')
+        self.assertEqual(self.config.status()['providers']['openai']['max_calls'], 23)
+
+    def test_partial_save_uses_defaults_only_for_new_provider(self):
+        self.config.save_partial('google', 'gemini-3.5-flash-lite', 'new-key')
+        saved = self.config.status()['providers']['google']
+        self.assertEqual([saved[k] for k in ('max_calls','max_usd','input_price','output_price')],
+                         [100, '1', '1', '5'])
+
+    def test_partial_save_rejects_invalid_fields_without_changing_settings(self):
+        self.config.save('openai', 'gpt-4.1-mini', 'original', max_calls=9)
+        before = self.config.status()
+        for values in ({'max_calls': 0}, {'max_usd': 'NaN'}, {'input_price': None},
+                       {'unknown': 'value'}, {'api_key': ''}):
+            with self.subTest(values=values), self.assertRaises(ValueError):
+                self.config.save_partial('openai', 'gpt-4.1-nano', **values)
+        self.assertEqual(self.config.status(), before)
+        self.assertEqual(self.config.credentials('openai'), 'original')
+
+    def test_partial_save_keeps_verified_active_provider_for_unchanged_credentials(self):
+        from artefact.state import State
+        state = State(Path(self.temp.name)/'usage.db')
+        self.config.save('openai', 'gpt-4.1-mini', 'original')
+        self.config.test_connection('openai', state, transport=lambda body: {'output': []})
+        self.config.activate('openai')
+        before = state.usage()
+        for changes in ({}, {'max_calls': 25}, {'api_key': ' original ', 'max_usd': '4'}):
+            with self.subTest(changes=changes):
+                self.config.save_partial('openai', 'gpt-4.1-mini', **changes)
+                status = self.config.status()
+                self.assertEqual(status['active'], 'openai')
+                self.assertTrue(status['providers']['openai']['verified'])
+                self.config.activate('openai')
+                self.assertEqual(state.usage(), before)
+
+    def test_partial_save_invalidates_verified_active_provider_for_changed_credentials(self):
+        from artefact.state import State
+        state = State(Path(self.temp.name)/'usage.db')
+        for model,key in (('gpt-4.1-nano',None), ('gpt-4.1-mini','replacement')):
+            with self.subTest(model=model,key=key):
+                self.config.save('openai', 'gpt-4.1-mini', 'original')
+                self.config.test_connection('openai', state, transport=lambda body: {'output': []})
+                self.config.activate('openai')
+                self.config.save_partial('openai', model, key)
+                status = self.config.status()
+                self.assertIsNone(status['active'])
+                self.assertFalse(status['providers']['openai']['verified'])
+                with self.assertRaises(ValueError): self.config.activate('openai')
+
 if __name__ == '__main__': unittest.main()
 
 class ProviderFactoryTests(unittest.TestCase):

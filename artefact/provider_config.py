@@ -66,22 +66,40 @@ class ProviderConfig:
             raise ValueError('Invalid curated model catalog') from None
 
     def save(self, provider, model, api_key=None, max_calls=100, max_usd='1', input_price='1', output_price='5'):
+        self._save(provider, model, api_key, dict(max_calls=max_calls, max_usd=max_usd,
+                                               input_price=input_price, output_price=output_price))
+
+    def save_partial(self, provider, model, api_key=None, **settings):
+        """Save visible fields while retaining omitted limits, prices and credentials."""
+        if set(settings) - {'max_calls', 'max_usd', 'input_price', 'output_price'}:
+            raise ValueError('Unsupported provider setting')
+        self._save(provider, model, api_key, settings, partial=True)
+
+    def _save(self, provider, model, api_key, settings, *, partial=False):
         if model not in self.models().get(provider, ()):
             raise ValueError('Unsupported provider or model')
-        try:
-            values = [Decimal(str(v)) for v in (max_usd, input_price, output_price)]
-            if any(not v.is_finite() or v <= 0 for v in values) or isinstance(max_calls, bool) or int(max_calls) != float(max_calls) or int(max_calls) < 1:
-                raise ValueError()
-        except (ValueError, TypeError, InvalidOperation, OverflowError):
-            raise ValueError('Positive finite limits and prices required') from None
         if api_key is not None and (not isinstance(api_key, str) or not api_key.strip() or len(api_key)>4096):
             raise ValueError('Invalid API key')
         with connection(self.path) as db:
             db.execute('BEGIN IMMEDIATE')
-            existing = db.execute('SELECT secret FROM provider_settings WHERE provider=?', (provider,)).fetchone()
-            secret = self.secrets.encrypt(api_key.strip()) if api_key is not None else (existing[0] if existing else None)
-            db.execute('DELETE FROM provider_verified WHERE provider=?', (provider,))
-            db.execute('UPDATE provider_active SET provider=NULL WHERE provider=?', (provider,))
+            existing = db.execute('SELECT secret, max_calls, max_usd, input_price, output_price, model FROM provider_settings WHERE provider=?', (provider,)).fetchone()
+            merged = dict(zip(('max_calls','max_usd','input_price','output_price'),
+                              existing[1:5] if partial and existing else (100, '1', '1', '5')))
+            merged.update(settings)
+            max_calls=merged['max_calls']
+            try:
+                values = [Decimal(str(merged[key])) for key in ('max_usd','input_price','output_price')]
+                if any(not v.is_finite() or v <= 0 for v in values) or isinstance(max_calls, bool) or int(max_calls) != float(max_calls) or int(max_calls) < 1:
+                    raise ValueError()
+            except (ValueError, TypeError, InvalidOperation, OverflowError):
+                raise ValueError('Positive finite limits and prices required') from None
+            same_key = api_key is None or (partial and existing and existing[0] is not None
+                                           and self.secrets.decrypt(existing[0]) == api_key.strip())
+            # Keep ciphertext too: verification is bound to this exact encrypted value.
+            secret = (existing[0] if existing else None) if same_key else self.secrets.encrypt(api_key.strip())
+            if not (partial and existing and existing[5] == model and same_key):
+                db.execute('DELETE FROM provider_verified WHERE provider=?', (provider,))
+                db.execute('UPDATE provider_active SET provider=NULL WHERE provider=?', (provider,))
             db.execute('INSERT OR REPLACE INTO provider_settings VALUES (?,?,?,?,?,?,?)', (provider, model, secret, int(max_calls), *(str(v) for v in values)))
 
     def activate(self, provider):
