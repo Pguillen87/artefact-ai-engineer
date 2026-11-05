@@ -179,7 +179,9 @@ class CommercialConversationFlowTests(unittest.TestCase):
             'Posso parcelar R$ 150,00 em 2x?', None, None,
             _call('installment_quote', {'amount_brl': '9000.00', 'installments': 2}, 'a'),
         )
-        self.assertIn('não consegui', answer.lower())
+        self.assertIn('R$ 150,00', answer)
+        self.assertIn('2x R$ 75,00', answer)
+        self.assertNotIn('R$ 9.000,00', answer)
         self.assertNotIn('2x R$ 4.500,00', answer)
 
     def test_warranty_answer_mentions_certificate_without_promising_two_years(self):

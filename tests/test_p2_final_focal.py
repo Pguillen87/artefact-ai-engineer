@@ -116,7 +116,7 @@ class FinalFocalTests(unittest.TestCase):
                     self.assertNotIn('Korg Synth:', answer)
 
     def test_no_tool_cannot_claim_a_simulation_or_success(self):
-        text = 'O Korg custa R$ 900. Use o preço do catálogo e simule em 3x.'
+        text = 'Quero o Korg Synth por R$ 900 em 3x.'
         answer, trace = self.ask(text, [], True)
         self.assertEqual(trace['executed_tools'], [])
         self.assertNotEqual(trace['status'], 'success')

@@ -80,7 +80,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual(post('/seller-contact',contact='(67) 99999-1234'),303)
         self.assertEqual(self.admin.seller_contact(),'(67) 99999-1234')
         self.assertEqual(post('/seller-contact-reset'),303)
-        self.assertEqual(self.admin.seller_contact(),'(67) 3341-4444')
+        self.assertEqual(self.admin.seller_contact(),'')
 
     def test_review_endpoint_restricts_access_and_operator_completes(self):
         import json

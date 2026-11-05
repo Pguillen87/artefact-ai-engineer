@@ -242,7 +242,7 @@ class ArchitectureContracts(unittest.TestCase):
         self.assertIn('não consegui',answer)
         self.assertIn('"category": "provider"',captured.output[0]); self.assertNotIn(secret,str(captured.output))
         with self.assertLogs('artefact.operations',level='INFO') as captured:
-            ConversationAgent(self.snapshot,Mock(),snapshot_loader=Mock(side_effect=sqlite3.OperationalError(secret))).answer('oi?',chat_id=1)
+            ConversationAgent(self.snapshot,Mock(),snapshot_loader=Mock(side_effect=sqlite3.OperationalError(secret))).answer('Qual o preço do Korg?',chat_id=1)
         self.assertIn('"category": "persistence"',captured.output[0]); self.assertNotIn(secret,str(captured.output))
         provider=Mock(); provider.request.return_value={'output':[tool('request_technical_review',{'product_id':1,'field':'specs.keys','reason':'inconsistencia_catalogo'})]}
         with self.assertLogs('artefact.operations',level='INFO') as captured:
@@ -282,27 +282,24 @@ class ArchitectureContracts(unittest.TestCase):
         self.assertEqual(len({e['operation_id'] for e in events}),1)
 
     def test_fictional_order_followup_uses_unique_identification_and_isolated_chat(self):
-        provider=Mock(); provider.request.side_effect=[
-            {'output':[]}, {'output':[tool('orders',{'full_name':'Synthetic Customer'})]},
-            {'output':[tool('orders',{'full_name':'Synthetic Customer'})]},
-            {'output':[tool('orders',{'full_name':'Synthetic Customer'})]}]
+        provider=Mock(); provider.request.return_value={'output':[]}
         agent=ConversationAgent(self.snapshot,provider)
         agent.answer('Meu nome é Synthetic Customer.',chat_id=1)
-        self.assertIn('Pedido 1:',agent.answer('Quais são meus pedidos?',chat_id=1))
+        self.assertNotIn('Pedido 1:',agent.answer('Quais são meus pedidos?',chat_id=1))
+        self.assertIn('Pedido 1:',agent.answer('Quais são meus pedidos? fake@example.invalid',chat_id=1))
         self.assertNotIn('Pedido 1:',agent.answer('Quais são meus pedidos?',chat_id=2))
         self.assertNotIn('Pedido 1:',agent.answer('Meu nome é Unknown User e quero meus pedidos',chat_id=1))
-        provider=Mock(); provider.request.return_value={'output':[tool('orders',{'full_name':'Synthetic Customer'})]}
+        provider=Mock(); provider.request.return_value={'output':[]}
         self.assertNotIn('Pedido 1:',ConversationAgent(self.snapshot,provider).answer('Meu nome é Synthetic Customer Junior, quero meus pedidos',chat_id=1))
         self.assertNotIn('Pedido 1:',ConversationAgent(self.snapshot,provider).answer('Não sou Synthetic Customer, quero meus pedidos',chat_id=1))
 
     def test_order_topic_invalidates_previous_commercial_amount(self):
         provider=Mock(); provider.request.side_effect=[{'output':[]},
-            {'output':[tool('orders',{'full_name':'Synthetic Customer'})]},
             {'output':[tool('installment_quote',{'amount_brl':'900','installments':3})]}]
         agent=ConversationAgent(self.snapshot,provider)
         agent.answer('Meu nome é Synthetic Customer, considero R$ 900.',chat_id=1)
         self.assertNotIn('Synthetic Customer',repr(agent.context))
-        self.assertIn('Pedido 1:',agent.answer('Quais são meus pedidos?',chat_id=1))
+        self.assertIn('Pedido 1:',agent.answer('Quais são meus pedidos? fake@example.invalid',chat_id=1))
         self.assertIn('informe um único valor',agent.answer('E em 3x?',chat_id=1))
 
     def test_optional_telegram_allowlist_is_validated_and_enforced(self):

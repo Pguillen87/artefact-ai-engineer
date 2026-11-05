@@ -15,7 +15,8 @@ from .data import SCHEMAS, Snapshot, StructuralError, _freeze, _parse, _scan
 
 MAX_BYTES = 1024 * 1024
 MAX_ROWS = 1000
-DEFAULT_SELLER_CONTACT = '(00) 90000-0000'
+DEFAULT_SELLER_CONTACT = ''
+LEGACY_SELLER_CONTACT_PLACEHOLDER = '(00) 90000-0000'
 DEFAULT_SELLER_NAME = ''
 
 
@@ -29,6 +30,13 @@ def _validate_contact(value):
     if not isinstance(value,str) or not re.fullmatch(r'\([1-9][0-9]\) [2-9][0-9]{3,4}-[0-9]{4}',value):
         raise ValueError('Contato inválido; use (DD) NNNN-NNNN ou (DD) NNNNN-NNNN')
     return value
+
+
+def _configured_contact(value):
+    """Hide the invalid demo placeholder left by earlier builds."""
+    if value == LEGACY_SELLER_CONTACT_PLACEHOLDER:
+        return DEFAULT_SELLER_CONTACT
+    return _validate_contact(value)
 
 
 def _encode_products(rows):
@@ -117,7 +125,7 @@ def published_snapshot(path, baseline):
         if row is None: raise ValueError('Catálogo publicado inválido')
         exists=con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='public_settings'").fetchone()
         setting=con.execute("SELECT value FROM public_settings WHERE key='seller_contact'").fetchone() if exists else None
-        contact=_validate_contact(setting[0]) if setting else DEFAULT_SELLER_CONTACT
+        contact=_configured_contact(setting[0]) if setting else DEFAULT_SELLER_CONTACT
         name=con.execute("SELECT value FROM public_settings WHERE key='seller_name'").fetchone() if exists else None
         seller_name=_validate_seller_name(name[0]) if name else DEFAULT_SELLER_NAME
         products = _parse('products', row[0])
@@ -243,7 +251,7 @@ class CatalogAdmin:
     def seller_contact(self):
         with _connect(self.serving_path) as con:
             row=con.execute("SELECT value FROM public_settings WHERE key='seller_contact'").fetchone()
-            return _validate_contact(row[0]) if row else DEFAULT_SELLER_CONTACT
+            return _configured_contact(row[0]) if row else DEFAULT_SELLER_CONTACT
 
     def seller_name(self):
         with _connect(self.serving_path) as con:
@@ -280,7 +288,17 @@ class CatalogAdmin:
         finally: con.close()
 
     def reset_seller_contact(self):
-        self.set_seller_contact(DEFAULT_SELLER_CONTACT)
+        con=self._transaction()
+        try:
+            previous=con.execute("SELECT value FROM public_settings WHERE key='seller_contact'").fetchone()
+            con.execute("DELETE FROM public_settings WHERE key='seller_contact'")
+            reason=json.dumps({'before':previous[0] if previous else DEFAULT_SELLER_CONTACT,
+                               'after':DEFAULT_SELLER_CONTACT},ensure_ascii=False)
+            con.execute("INSERT INTO admin.events(action,reason) VALUES('seller_contact',?)",(reason,))
+            con.commit()
+        except BaseException:
+            con.rollback();raise
+        finally: con.close()
 
     def _existing(self):
         snapshot = published_snapshot(self.serving_path, self.baseline)

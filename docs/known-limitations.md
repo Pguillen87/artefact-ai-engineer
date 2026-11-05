@@ -1,22 +1,24 @@
 ## Known limitations and future improvements
 
 - The 17-case conversational sample does not establish general production readiness. The restricted company manual was not consulted during this retest.
-- `INSTALL-001` remains a failure: the request to pay for the Shelby SU-21S in 12 installments returned a generic fallback. The expected maximum is 3 installments of R$ 53.30 for a total of R$ 159.90.
+- In the published conversational retest, `INSTALL-001` failed: the request to pay for the Shelby SU-21S in 12 installments returned a generic fallback. The expected maximum is 3 installments of R$ 53.30 for a total of R$ 159.90. A later code change adds deterministic catalog routing for this request and its local regression passes; no provider-backed retest was run after that change, so the original QA result remains recorded as-is.
 - Catalog, promotion, stock, shipping, coming-soon status, and historical order answers reflect the frozen catalog v3 / cloned QA data. They do not establish current live availability or fulfillment.
 - Historical order data was verified in a two-turn flow after the privacy gate. The gate was already correct in the baseline; the expanded historical lookup coverage does not indicate a gate fix. The demo asks for a registered contact but does not prove possession with an OTP.
 - The project suite improved from 84/107 passing and 23 failing on the clean baseline to 86/107 passing and 21 failing on the evaluated version. The 21 current failures were already present in the clean baseline; two Pix failures were resolved, with no new failures in that set.
+- After the later CI corrections, the complete local suite passed with 568 tests, 7 skipped and no failures. This is local unit-suite evidence, not a replacement for the published conversational retest.
 - Agent regression unit tests (9/9) and fake harness checks (8/8) are separate layers and do not mean the project suite passed in full.
-- Keep a regression case for installment intent and validate it with a fresh conversation after the requested fix. Report that result separately; do not overwrite this 17-case retest.
+- Keep the Shelby installment regression in the local suite. If any new provider-backed conversation run is performed, report it separately; do not overwrite this 17-case retest.
 
 ## Limitações conhecidas e melhorias futuras
 
 - A amostra conversacional de 17 casos não comprova prontidão geral para produção. O manual restrito da empresa não foi consultado neste reteste.
-- `INSTALL-001` continua falhando: o pedido de parcelamento do Shelby SU-21S em 12 vezes retornou um fallback genérico. O máximo esperado é 3 parcelas de R$ 53,30, totalizando R$ 159,90.
+- No reteste conversacional publicado, `INSTALL-001` falhou: o pedido de parcelamento do Shelby SU-21S em 12 vezes retornou um fallback genérico. O máximo esperado é 3 parcelas de R$ 53,30, totalizando R$ 159,90. Uma alteração posterior adiciona uma rota determinística de catálogo para esse pedido e sua regressão local passou; não houve novo reteste com provedor após essa alteração, então o resultado original de QA permanece registrado sem alterações.
 - As respostas de catálogo, promoção, estoque, frete, status “em breve” e pedidos históricos refletem o catálogo v3 congelado e os dados clonados de QA; não comprovam disponibilidade ou entrega em tempo real.
 - Os dados históricos foram verificados em um fluxo de dois turnos após o gate de privacidade. O gate já estava correto no baseline; a ampliação da consulta histórica não representa correção do gate. A demonstração pede um contato cadastrado, mas não comprova a posse com OTP.
 - A suíte do projeto passou de 84/107 aprovados e 23 falhas no baseline limpo para 86/107 aprovados e 21 falhas na versão avaliada. As 21 falhas atuais já existiam no baseline limpo; duas falhas de casos Pix foram resolvidas, sem novas falhas nesse conjunto.
+- Após as correções posteriores da CI, a suíte local completa passou com 568 testes, 7 ignorados e nenhuma falha. Isso é evidência da suíte unitária local, não substitui o reteste conversacional publicado.
 - Os testes unitários de regressão do agente (9/9) e os testes fake do harness (8/8) são camadas separadas e não significam que toda a suíte do projeto passou.
-- Manter um caso de regressão para intenção de parcelamento e validá-lo em uma nova conversa após a correção solicitada. Registrar esse resultado separadamente, sem substituir o reteste de 17 casos.
+- Manter a regressão de parcelamento Shelby na suíte local. Se houver uma nova conversa com provedor, registrar o resultado separadamente, sem substituir o reteste de 17 casos.
 
 ### Matriz de achados
 

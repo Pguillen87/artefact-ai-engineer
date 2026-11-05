@@ -53,7 +53,7 @@ class Snapshot:
     tables: Mapping[str, tuple[Mapping, ...]]
     issues: tuple[QualityIssue, ...]
     hashes: Mapping[str, str]
-    seller_contact: str = '(00) 90000-0000'
+    seller_contact: str = ''
     catalog_version: int = 0
     seller_name: str = ''
 

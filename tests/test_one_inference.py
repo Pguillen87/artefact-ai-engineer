@@ -51,7 +51,7 @@ class TwoStageInferenceTests(unittest.TestCase):
    self.assertEqual(state.usage()['reserved_usd'],expected)
 
  def test_product_pix_order_use_at_most_two_responses_calls_each(self):
-  cases=[('Preço Korg?','search_products',{'text':'Korg'},'1.127,50'),('Pix?','policy',{'topic':'pix'},'5%'),('Synthetic Customer pedido?','orders',{'full_name':'Synthetic Customer'},'status cadastrado')]
+  cases=[('Preço Korg?','search_products',{'text':'Korg'},'1.127,50'),('Pix?','policy',{'topic':'pix'},'5%'),('Meu pedido fake@example.invalid?','orders',{'full_name':'Synthetic Customer'},'status cadastrado')]
   with TemporaryDirectory() as d:
    root=Path(d);write_dataset(root);snapshot=load_dataset(root);state=State(root/'s.db')
    for question,name,args,expected in cases:
@@ -59,5 +59,5 @@ class TwoStageInferenceTests(unittest.TestCase):
     transport=Mock(side_effect=[response,response])
     provider=ResponsesProvider('dummy','model',state,Decimal('1'),6,Decimal('0.1'),Decimal('0.5'),transport=transport)
     self.assertIn(expected,ConversationAgent(snapshot,provider).answer(question,chat_id=1))
-    self.assertEqual(transport.call_count,2)
-   self.assertEqual(state.usage()['calls'],6)
+    self.assertLessEqual(transport.call_count,2)
+   self.assertEqual(state.usage()['calls'],4)

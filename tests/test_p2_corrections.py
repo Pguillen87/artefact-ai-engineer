@@ -97,7 +97,7 @@ class P2CorrectionTests(unittest.TestCase):
         })
         provider = ScriptedProvider([call('orders', {'full_name': 'Synthetic Customer'})])
         agent = ConversationAgent(snapshot, provider)
-        question = ('Meu nome completo é Synthetic Customer. Por que os produtos do meu pedido 3 '
+        question = ('Meu e-mail cadastrado é fake@example.invalid. Por que os produtos do meu pedido 3 '
                     'hoje somam R$ 3.498,00?')
 
         answer = agent.answer(question, chat_id='G05')
@@ -121,7 +121,7 @@ class P2CorrectionTests(unittest.TestCase):
         self.assertEqual(str(found['catalog_comparison']['catalog_total_brl']), '3498')
         self.assertEqual(str(found['catalog_comparison']['difference_brl']), '48')
         provider = ScriptedProvider([call('orders', {'full_name': customer['name']})])
-        question = (f"Meu nome completo é {customer['name']}. Por que os produtos do meu pedido 3 "
+        question = (f"Meu e-mail cadastrado é {customer['email']}. Por que os produtos do meu pedido 3 "
                     'hoje somam R$ 3.498,00?')
         answer = ConversationAgent(snapshot, provider).answer(question, chat_id='G05-real')
         self.assertIn('total registrado R$ 3.450,00', answer)
@@ -247,7 +247,7 @@ class P2CorrectionTests(unittest.TestCase):
         self.assertIn('R$ 375,67', followup)
         self.assertEqual(followup_trace['tool_executions'][0]['name'], 'search_products')
         self.assertEqual(followup_trace['tool_executions'][0]['status'], 'executed')
-        self.assertEqual(len(provider.calls), 3)
+        self.assertEqual(len(provider.calls), 2)
         self.assertNotIn('Korg Synth 1 Pro', independent)
         self.assertNotIn('3x R$ 300,00', independent)
 

@@ -42,7 +42,7 @@ pip install -r requirements.txt
 python -m unittest discover -s tests
 ```
 
-Test sources are included. This publication-preparation pass did not run tests, QA, a container build or provider requests.
+Test sources are included. The latest provider-backed conversational retest and its limits are documented in [docs/qa/retest17-2026-11-04.md](docs/qa/retest17-2026-11-04.md). After that retest, the code added a deterministic catalog route for product installment questions; its Shelby SU-21S 12x regression passes locally. This checkout has not run a new provider-backed conversational QA after that code change. The full local unit suite now passes: 568 tests, 7 skipped, 0 failures. The GitHub Actions workflow for the previous PR head failed; a new workflow will run for this update.
 
 ## Technical decisions
 
@@ -54,24 +54,27 @@ Test sources are included. This publication-preparation pass did not run tests, 
 - Docker Compose separates the administration interface from the agent API. The administration port is bound to loopback, and the agent API is reachable only on the Compose network.
 - The application uses ordinary Python modules, SQLite and Docker Compose. A vector database was not selected because the supplied product, order and promotion records are structured and require exact filtering. Demonstration-policy replies use configured rules; this repository does not contain or retrieve the private policy manual.
 
-## Known limitations and submission status
+## Validation, known limitations and submission status
 
 This is an evaluation prototype, not a production customer-support service.
 
-- The challenge requires three to five conversation examples, including at least one non-trivial example. They are not included in this review copy, so the submission remains incomplete until reviewed, sanitized examples are added.
-- This candidate has not been executed or accepted in a fresh test run. Live-provider answer quality and full end-to-end conversation behavior remain unverified here.
-- Product discovery still routes accessories such as strings, cables, pedals and amplifiers poorly. Installment eligibility is not always calculated, and mixed-payment intent can be lost in follow-up turns.
+- The published conversational retest covered 17 cases across 21 turns: 16 passed and one installment case failed. `INSTALL-001` returned a generic fallback for a request to pay R$ 159.90 in 12 installments; the expected maximum is three installments of R$ 53.30. See the [full retest report](docs/qa/retest17-2026-11-04.md). This retest predates the deterministic installment route described above.
+- All retest requests returned HTTP 200, which confirms transport response only, not answer correctness. The report records 11 model calls, four privacy-gated order lookups followed by checks of the requested historical records, and the exact candidate data snapshot.
+- The challenge asks for three to five conversation examples, including a non-trivial case. Five reviewed, sanitized examples are included in [docs/examples/agent-conversations.md](docs/examples/agent-conversations.md); no order conversation is included.
+- The complete local unit suite passed after the installment-route and CI fixes: 568 tests, 7 skipped, 0 failures. This does not replace the separate provider-backed conversational retest. The known limitations file preserves the earlier 107-test selection and its baseline comparison.
 - Catalog and promotion answers do not establish current inventory or live eligibility.
-- Demonstration rules have not been checked against the private policy manual in this review. Do not present them as verified current store policy.
+- The restricted policy manual was not consulted during the latest retest. Demonstration rules are not represented as verified current store policy.
 - Demonstration contact records are inconsistent; confirm the official channel with the store operator. Order lookup uses a matching contact detail as a demo safeguard; it does not prove identity.
 - The existing public ancestry contains store contact details. This candidate adds no real customer data or contact details, and does not rewrite already-published history.
 - The administrator password must be set locally before startup. Loopback binding and demo-oriented authentication are not a production security boundary.
 - No public deployment is configured. No open-source license is declared in this repository.
 
+For the retest's interpretation, remaining risks and suggested improvements, see [docs/known-limitations.md](docs/known-limitations.md).
+
 ## Use of AI assistants
 
-OpenAI Codex assisted with implementation, source review and documentation. The project owner supplied a NotebookLM-generated summary of challenge submission requirements; the challenge brief was checked separately for deliverable details. Human decisions remain the responsibility of the project owner. Generated code and summaries are not treated as verification unless independently reviewed and executed.
+Codex Luna, used through Hermes and Codex, supported development across the project. Specialized Hermes profiles contributed domain-specific guidance and review while preparing the Spec-Driven Development (SDD) specifications; Codex Luna then assisted with implementation. The project owner made the product and architecture decisions and reviewed the resulting work. AI-generated code and summaries were not treated as verification by themselves.
 
 ## Example conversations
 
-No conversation transcript is included in this review branch. Add three to five reviewed, sanitized examples before treating the challenge submission as complete. Do not use real customer names, contact details, order records or provider transcripts without review and authorization.
+Five reviewed and sanitized conversation examples are available in [docs/examples/agent-conversations.md](docs/examples/agent-conversations.md). They are literal examples from the QA clone, not rewritten demonstrations. They contain no customer names, contact details, order IDs or tracking codes. The full QA context and the one failing case are documented in [docs/qa/retest17-2026-11-04.md](docs/qa/retest17-2026-11-04.md).

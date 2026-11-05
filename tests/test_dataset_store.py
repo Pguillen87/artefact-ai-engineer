@@ -179,8 +179,8 @@ class DatasetIntegrityTests(unittest.TestCase):
    root=Path(d);write_dataset(root);store=DatasetStore(root/'catalog.db')
    store.import_files([(p.name,p.read_bytes()) for p in root.glob('*.csv')])
    admin=CatalogAdmin(root/'admin.db',root/'catalog.db',store.load(),dataset_store=store)
-   admin.set_seller('Test Seller', '(00) 90000-0000')
-   self.assertEqual(store.load().seller_contact,'(00) 90000-0000')
+   admin.set_seller('Test Seller', '(67) 90000-0000')
+   self.assertEqual(store.load().seller_contact,'(67) 90000-0000')
    self.assertEqual(store.load().seller_name,'Test Seller')
 
 class StaleAdminTests(unittest.TestCase):

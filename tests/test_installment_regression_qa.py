@@ -65,7 +65,7 @@ class InstallmentRegressionQA(unittest.TestCase):
                      'Quero pagar 3x R$ 150', 'Quero pagar R$ 150 3x'):
             with self.subTest(text=text): self.assertIsNone(extract_installment_request(text))
 
-    def test_tool_cannot_substitute_amount_and_below_minimum_is_rejected(self):
+    def test_deterministic_route_ignores_provider_amount_and_enforces_minimum(self):
         class Provider:
             def __init__(self, amount): self.amount = amount
             def request(self, messages):
@@ -73,8 +73,11 @@ class InstallmentRegressionQA(unittest.TestCase):
                     'arguments':json.dumps({'amount_brl':self.amount,'installments':3}),'call_id':'1'}]}
         with TemporaryDirectory() as directory:
             root=Path(directory); write_dataset(root); snapshot=load_dataset(root)
-            answer=ConversationAgent(snapshot,Provider('450')).answer('Quanto fica 3 vezes de R$ 150?',chat_id=1)
-            self.assertIn('não consegui', answer)
+            answer=ConversationAgent(snapshot,Provider('999')).answer('Quanto fica 3 vezes de R$ 150?',chat_id=1)
+            self.assertIn('R$ 450,00', answer)
+            self.assertIn('3x R$ 150,00', answer)
+            self.assertNotIn('R$ 999,00', answer)
+            self.assertNotIn('3x R$ 333,00', answer)
             answer=ConversationAgent(snapshot,Provider('40')).answer('Quero pagar 3x de R$ 40.',chat_id=1)
             self.assertIn('não é permitido', answer)
             self.assertIn('R$ 120,00', answer)
@@ -91,7 +94,7 @@ class InstallmentRegressionQA(unittest.TestCase):
             self.assertNotIn('Korg Synth:',answer)
             self.assertNotIn('parcelamento permitido',answer)
             self.assertNotIn('3x R$ 300,00',answer)
-            self.assertEqual(agent.last_trace['tool_executions'][0]['result_count'],0)
+            self.assertEqual(agent.last_trace['tool_executions'][0]['status'],'rejected')
             within=agent.answer('Meu orçamento é R$ 1.200. Quanto custa Korg em 3x?',chat_id=1)
             self.assertIn('R$ 1.014,75',within)
             self.assertIn('3x R$ 338,25',within)

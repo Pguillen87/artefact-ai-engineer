@@ -335,6 +335,8 @@ def render_results(results):
                 if local_quote is None:
                     lines.append(data['summary'])
                 else:
+                    if local_quote.get('status') != 'quoted':
+                        lines.append(data['summary'])
                     lines.extend(_render_local_shipping_quote(local_quote))
         elif name=='price_mismatch':
             if not isinstance(data,dict) or not isinstance(data.get('product_name'),str):
@@ -358,10 +360,12 @@ def render_results(results):
                 lines.append('Qual é o valor do orçamento exclusivo para os produtos? Não executei a busca sem um teto definido.')
             elif data.get('reason') == 'budget_includes_shipping':
                 lines.append('O orçamento inclui frete. Confirme o limite exclusivo para produtos; não subtraí um frete sem verificação e não executei a busca.')
+            elif data.get('reason') == 'ambiguous_product_selection':
+                lines.append('Para calcular parcelas, informe um único valor em reais para um único produto; não tratei outros produtos como parte de uma compra combinada.')
             elif data.get('reason') == 'recommendation_scope_missing':
                 lines.append('Qual tipo ou categoria de instrumento você quer que eu recomende? Não executei a recomendação sem esse contexto.')
             else:
-                lines.append('Não realizei a cotação: esclareça o produto, a base do valor ou a restrição indicada antes de simular parcelas.')
+                lines.append('Não realizei a cotação: informe um único valor em reais e esclareça o produto, a base do valor ou a restrição antes de simular parcelas.')
         elif name=='execution_clarification':
             lines.append('Nesta consulta, não consegui validar os argumentos da cotação e não a executei; esclareça essa parte e informe um único valor em reais e a quantidade de parcelas desejada.')
         elif name=='clarification':

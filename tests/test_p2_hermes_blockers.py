@@ -163,16 +163,21 @@ class HermesCommercialBlockerTests(unittest.TestCase):
                 self.assertNotIn('3x R$ 300,00', answer)
                 self.assertNotEqual(agent.last_trace['commercial_basis']['kind'], 'hypothetical')
 
-    def test_wrong_tool_arguments_never_become_authorized_catalog_quote(self):
+    def test_direct_catalog_route_ignores_wrong_model_arguments(self):
         text = ('O Korg Synth 1 Pro custa R$ 900. Confirme o preço do catálogo '
                 'e simule em 3x.')
         for plan in (fixtures.call('search_products', {'text': 'Produto inexistente', 'installments': 3}),
                      fixtures.call('installment_quote', {'amount_brl': '999.00', 'installments': 3})):
             with self.subTest(tool=plan['name']):
                 answer, agent = self.ask(text, [plan])
-                self.assertNotIn('parcelamento permitido', answer.lower())
-                self.assertNotIn(plan['name'], agent.last_trace['executed_tools'])
-                self.assertTrue(agent.last_trace['rejected_tools'])
+                self.assertIn('diverge', answer.lower())
+                self.assertIn('1.127,00', answer)
+                self.assertIn('375,67', answer)
+                self.assertNotIn('3x R$ 300,00', answer)
+                self.assertNotIn('3x R$ 333,00', answer)
+                self.assertEqual(agent.last_trace['executed_tools'], ['search_products'])
+                self.assertTrue(any(item['reason'] == 'identified_product_installment_calculation'
+                                    for item in agent.last_trace['plan_overrides']))
 
     def test_price_conflict_without_shipping_tool_discloses_omission(self):
         plan = fixtures.call('search_products', {'text': 'Korg Synth 1 Pro', 'installments': 3})

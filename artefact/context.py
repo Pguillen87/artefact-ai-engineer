@@ -97,7 +97,10 @@ class CommercialBasis:
 
     @property
     def quote_allowed(self) -> bool:
-        return (self.restriction is None and self.count is not None and
+        budgeted_catalog_product = (self.kind == 'catalog' and self.amount_role == 'budget_cap' and
+                                    self.product is not None and self.scope.max_price is not None)
+        return (self.restriction is None and
+                (self.amount_role != 'budget_cap' or budgeted_catalog_product) and self.count is not None and
                 self.kind in {'catalog', 'hypothetical', 'total'} and
                 self.quote_amount is not None)
 
@@ -163,7 +166,11 @@ def resolve_commercial_basis(text: str, snapshot, previous: ConversationContext 
     values = []
     financial = []
     hypothetical = False
-    restriction = None
+    restriction = ('ambiguous_product_selection'
+                   if count is not None and re.search(
+                       r'\b(?:e\s+outro(?:s)?|outro(?:s)? produto|mais de um produto|ambos os produtos)\b',
+                       count_text)
+                   else None)
     for clause in clauses:
         polarity = clause_polarity(clause)
         clause_products = mentioned_products(clause, snapshot)
@@ -386,7 +393,16 @@ def explicit_order_id(text: str) -> int | None:
 
 def order_lookup_requested(text: str) -> bool:
     spoken = normalize(text)
-    if (explicit_order_id(text) is not None or re.search(r'\bmeus? pedidos\b', spoken) or
+    if explicit_order_id(text) is not None:
+        return True
+    asks_order_status = bool(re.search(
+        r'\b(?:consult\w*|status|rastre\w*|acompan\w*|andamento|onde|ver)\b', spoken))
+    asks_future_arrival = bool(
+        re.search(r'\b(?:garant\w*|previs\w*|chega|chegar|prazo)\b', spoken) and
+        re.search(r'\b(?:amanha|hoje|quando|data)\b', spoken))
+    if asks_future_arrival and not asks_order_status:
+        return False
+    if (re.search(r'\bmeus? pedidos\b', spoken) or
             re.search(r'\b(?:meu|minha)\s+(?:pedido|encomenda)\b', spoken)):
         return True
     return bool(re.search(r'\b(?:pedido|pedidos|encomenda|encomendas)\b', spoken) and

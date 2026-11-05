@@ -3,7 +3,7 @@ from decimal import Decimal
 import re
 import unicodedata
 
-from .commercial import parse_brl_mention
+from .commercial import has_budget_context, parse_brl_mention
 
 
 def normalize(value: str) -> str:
@@ -102,7 +102,10 @@ def product_reference(text: str, name: str) -> str:
             return 'rejected'
         if re.search(r'\b(?:compar\w*|versus|vs)\b', spoken):
             return 'comparison'
-        if re.match(r'\s*(?:custa|vale|tem|qual|quanto|preco|valor|disponibilidade|estoque|promocao|garantia|foi\s+anunciad[oa])\b', tail):
+        if re.match(r'\s*(?:custa|vale|tem|qual|quanto|preco|valor|disponibilidade|'
+                    r'esta\s+disponivel|tem\s+disponivel|tem\s+estoque|'
+                    r'esta\s+em\s+estoque|ha\s+estoque|estoque|promocao|garantia|'
+                    r'foi\s+anunciad[oa])\b', tail):
             return 'affirmative'
         if re.search(r'\b(?:quero|prefiro|escolho|escolhi|escolha|mostre|procuro|comprar|adquirir|preco|valor|custa|tem|qual|quanto|disponibilidade|estoque|promocao)\b', prefix):
             return 'affirmative'
@@ -206,11 +209,18 @@ def has_independent_catalog_request(text: str, snapshot) -> bool:
             return True
         if clause_polarity(clause) != 'affirmative':
             continue
-        if not (mentioned_products(clause, snapshot) or mentioned_category_ids(clause, snapshot)):
+        categories = mentioned_category_ids(clause, snapshot)
+        products = mentioned_products(clause, snapshot)
+        if not (products or categories):
             continue
         request = re.sub(r'\b(?:quero|gostaria de)\s+saber\b', '', clause)
         if re.search(r'\b(?:quero|gostaria de|procuro|busco|comprar|adquirir|'
                      r'mostre|recomende|indique|opcoes|alternativas)\b', request):
+            return True
+        listing_request = bool(
+            re.search(r'\b(?:quais?|que|tem|vende\w*|disponiveis?|estoque|modelos?|instrumentos?|produtos?)\b', request)
+            and re.search(r'\b(?:opcoes?|modelos?|instrumentos?|produtos?|disponiveis?|estoque|quais?)\b', request))
+        if categories and (listing_request or has_budget_context(request)):
             return True
     return False
 
@@ -400,17 +410,19 @@ def local_shipping_destination(text: str) -> bool:
 def is_shipping_quote_request(text: str, snapshot) -> bool:
     """Separate a freight amount request from a general question about shipping policy."""
     spoken = normalize(text)
-    has_freight = bool(re.search(r'\bfrete\b', spoken))
-    has_delivery = bool(re.search(r'\bentreg\w*\b', spoken))
-    has_amount_question = bool(re.search(
-        r'\b(?:valor|preco|quanto|custa|custo|taxa|cotacao|cotar)\b', spoken))
-    if re.search(r'\b(?:politica|regras?|condicoes?)\b', spoken) and not has_amount_question:
-        return False
-    if ((has_amount_question and (has_freight or has_delivery)) or
-            (has_freight and re.search(r'\bqual\s+(?:o\s+)?frete\b', spoken))):
-        return True
-    return bool(has_freight and
-                (local_shipping_destination(text) or mentioned_products(text, snapshot)))
+    for clause in intent_clauses(text):
+        has_freight = bool(re.search(r'\bfrete\b', clause))
+        has_delivery = bool(re.search(r'\bentreg\w*\b', clause))
+        has_amount_question = bool(re.search(
+            r'\b(?:valor|preco|quanto|custa|custo|taxa|cotacao|cotar)\b', clause))
+        if re.search(r'\b(?:politica|regras?|condicoes?)\b', clause) and not has_amount_question:
+            continue
+        if ((has_amount_question and (has_freight or has_delivery)) or
+                (has_freight and re.search(r'\bqual\s+(?:o\s+)?frete\b', clause))):
+            return True
+        if has_freight and (local_shipping_destination(clause) or mentioned_products(clause, snapshot)):
+            return True
+    return False
 
 
 def validate_cheapest_intent(text: str, snapshot) -> bool:
@@ -449,13 +461,20 @@ def validate_catalog_intent(name: str, args: dict, text: str, snapshot, product_
         return True
     explicit_products = [p for p in snapshot.tables['products']
                          if re.search(r'(?<!\w)' + re.escape(normalize(p['name'])) + r'(?!\w)', normalized)]
+    affirmative_products = [p for p in mentioned_products(text, snapshot)
+                            if product_reference(text, p['name']) == 'affirmative']
+    contextual_product = next((p for p in snapshot.tables['products']
+                                if p['product_id'] == product_id), None)
+    selected_product_reference = bool(
+        contextual_product and product_reference(text, contextual_product['name']) in
+        {'affirmative', 'mentioned'} and
+        (not affirmative_products or
+         len(affirmative_products) == 1 and affirmative_products[0]['product_id'] == product_id))
     product_installment_lookup = bool(
         name == 'search_products' and type(args.get('installments')) is int and
         product_id is not None and set(args) <= {'text', 'installments', 'available_only'} and
-        isinstance(args.get('text'), str) and len(explicit_products) == 1 and
-        explicit_products[0]['product_id'] == product_id and
-        normalize(args['text']) == normalize(explicit_products[0]['name']) and
-        product_reference(text, explicit_products[0]['name']) != 'rejected')
+        isinstance(args.get('text'), str) and selected_product_reference and
+        normalize(args['text']) == normalize(contextual_product['name']))
     if name == 'search_products' and re.search(r'\bdisponiveis\b', normalized) and args.get('available_only') is not True:
         return False
     if args.get('available_only') is True and re.search(r'\bindisponiveis\b', normalized):
@@ -501,7 +520,7 @@ def validate_catalog_intent(name: str, args: dict, text: str, snapshot, product_
     mentioned_categories = mentioned_category_ids(text, snapshot)
     if name == 'recommend_products':
         mentioned_categories = mentioned_categories | frozenset(grounded_category_ids)
-    if len(mentioned_categories) > 1 and len(explicit_products) != 1:
+    if len(mentioned_categories) > 1 and len(explicit_products) != 1 and not product_installment_lookup:
         return False
     if category is not None:
         if not isinstance(category, str) or not category.strip():
@@ -511,7 +530,9 @@ def validate_catalog_intent(name: str, args: dict, text: str, snapshot, product_
             return False
         if selected[0] not in mentioned_categories and not (len(explicit_products) == 1 and explicit_products[0]['category_id'] == selected[0]):
             return False
-    elif mentioned_categories and not (len(explicit_products) == 1 and explicit_products[0]['category_id'] in mentioned_categories):
+    elif mentioned_categories and not (
+            len(explicit_products) == 1 and explicit_products[0]['category_id'] in mentioned_categories or
+            product_installment_lookup and contextual_product['category_id'] in mentioned_categories):
         return False
     terms = []
     for key in ('brand', 'model'):

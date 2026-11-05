@@ -21,10 +21,10 @@ class ServiceTests(unittest.TestCase):
   result=Catalog(self.snapshot).promotion(1)
   self.assertEqual(result['discount_percent'],Decimal('10'))
   self.assertEqual(result['freshness'],'snapshot_unknown')
- def test_order_matches_full_name_exactly_and_returns_recorded_total(self):
+ def test_order_lookup_requires_server_matched_customer_id(self):
   service=OrderService(self.snapshot)
-  self.assertEqual(service.lookup(' synthetic   CUSTOMER ')[0]['total_brl'],Decimal('1127.50'))
-  self.assertEqual(service.lookup('Synthetic'),())
+  self.assertEqual(service.lookup(1)[0]['total_brl'],Decimal('1127.50'))
+  self.assertEqual(service.lookup('Synthetic Customer'),())
   self.assertEqual(service.lookup('fake@example.invalid'),())
  def test_ambiguous_name_never_discloses_orders(self):
   with TemporaryDirectory() as d:
@@ -56,14 +56,15 @@ class AgentContractTests(unittest.TestCase):
   self.assertEqual(catalog.search(category='Teclados e Pianos',max_price=Decimal('100'),available_only=True),())
   self.assertEqual(catalog.search(category='Guitarras'),())
  def test_order_fields_distinguish_evidence(self):
-  order=OrderService(self.snapshot).lookup('Synthetic Customer')[0]
+  order=OrderService(self.snapshot).lookup(1)[0]
   self.assertEqual(order['items'][0]['name'],'Korg Synth')
   self.assertEqual(order['payment_method'],'pix')
   self.assertIsNone(order['payment_confirmed'])
   self.assertIsNone(order['delivered_at'])
   self.assertIsNone(order['estimated_delivery'])
  def test_policies_contacts_hours_guarantee(self):
-  self.assertIn('3321-4500',get_policy('contacts')['summary'])
+  self.assertIn('divergentes',get_policy('contacts')['summary'])
+  self.assertNotIn('3321-4500',get_policy('contacts')['summary'])
   self.assertIn('13h',get_policy('hours')['summary'])
   self.assertIn('90',get_policy('warranty')['summary'])
   self.assertIn('30',get_policy('exchange')['summary'])

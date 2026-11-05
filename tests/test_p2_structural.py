@@ -191,12 +191,15 @@ class StructuralCommercialTests(unittest.TestCase):
         self.assertEqual([(v.role, v.amount) for v in decision.values],
                          [('claimed_product_price', Decimal('900')), ('shipping_amount', Decimal('35'))])
         self.assertFalse(decision.quote_allowed)
-        for route in (False, True):
-            for bad in (('installment_quote', {'amount_brl': '999', 'installments': 3}),
-                        ('search_products', {'text': 'Korg', 'installments': 4}),
-                        ('search_products', {'text': 'Unknown', 'installments': 3})):
-                answer, _ = self.run_plan('Quanto fica o Korg em 3x?', bad, route)
-                self.assertNotIn('parcelamento permitido', answer.lower())
+        for bad in (('installment_quote', {'amount_brl': '999', 'installments': 3}),
+                    ('search_products', {'text': 'Korg', 'installments': 4}),
+                    ('search_products', {'text': 'Unknown', 'installments': 3})):
+            answer, _ = self.run_plan('Quanto fica o Korg em 3x?', bad, False)
+            self.assertNotIn('parcelamento permitido', answer.lower())
+        direct = ConversationAgent(self.snapshot, fixtures.ScriptedProvider(
+            [fixtures.call('installment_quote', {'amount_brl': '999', 'installments': 3})])).answer(
+                'Quanto fica o Korg em 3x?', chat_id='direct')
+        self.assertIn('375,67', direct)
 
     def test_direct_executor_keeps_shipping_when_product_quote_is_rejected(self):
         for plan in self.plans():

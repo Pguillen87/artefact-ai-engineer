@@ -153,32 +153,33 @@ class CatalogAdminTests(unittest.TestCase):
         self.assertTrue(answer().strip())
         for bad in ('', 'abc', '(00) 90000-0000 ext 1', '<script>'):
             with self.assertRaises(ValueError): self.admin.set_seller_contact(bad)
-        self.admin.set_seller_contact('(00) 90000-0000')
+        self.admin.set_seller_contact('(67) 90000-0000')
         self.assertTrue(answer().strip())
         restarted=CatalogAdmin(self.root/'admin.db',self.root/'serving.db',self.baseline)
-        self.assertEqual(restarted.seller_contact(),'(00) 90000-0000')
+        self.assertEqual(restarted.seller_contact(),'(67) 90000-0000')
         restarted.reset_seller_contact()
         self.assertTrue(answer().strip())
+        self.assertEqual(restarted.seller_contact(), '')
         self.assertEqual([e['action'] for e in restarted.history()].count('seller_contact'),2)
 
     def test_named_seller_is_atomic_persistent_and_used_in_handoff(self):
         from unittest.mock import Mock
         from artefact.conversation import ConversationAgent
         self.assertEqual(self.admin.seller_name(), '')
-        self.admin.set_seller('  Test Seller  ', '(00) 90000-0000')
+        self.admin.set_seller('  Test Seller  ', '(67) 90000-0000')
         restarted=CatalogAdmin(self.root/'admin.db',self.root/'serving.db',self.baseline)
         self.assertEqual(restarted.seller_name(), 'Test Seller')
-        self.assertEqual(restarted.seller_contact(), '(00) 90000-0000')
+        self.assertEqual(restarted.seller_contact(), '(67) 90000-0000')
         provider=Mock();provider.request.return_value={'output':[{'type':'function_call','name':'policy','arguments':json.dumps({'topic':'contacts'}),'call_id':'x'}]}
         answer=ConversationAgent(published_snapshot(self.root/'serving.db',self.baseline),provider).answer('Quero falar com um vendedor')
         self.assertIn('Test Seller',answer)
-        self.assertIn('(00) 90000-0000',answer)
-        for bad_name,bad_contact in (('Test Seller', 'invalid'), ('<script>', '(00) 90000-0000'), ('a'*121, '(00) 90000-0000'), ('Test Seller\nSouza', '(00) 90000-0000')):
+        self.assertIn('(67) 90000-0000',answer)
+        for bad_name,bad_contact in (('Test Seller', 'invalid'), ('<script>', '(67) 90000-0000'), ('a'*121, '(67) 90000-0000'), ('Test Seller\nSouza', '(67) 90000-0000')):
             with self.subTest(name=bad_name), self.assertRaises(ValueError):
                 restarted.set_seller(bad_name,bad_contact)
         self.assertEqual(restarted.seller_name(), 'Test Seller')
-        self.assertEqual(restarted.seller_contact(), '(00) 90000-0000')
-        restarted.set_seller_contact('(00) 90000-0000')
+        self.assertEqual(restarted.seller_contact(), '(67) 90000-0000')
+        restarted.set_seller_contact('(67) 90000-0000')
         self.assertEqual(restarted.seller_name(), 'Test Seller')
         self.assertEqual(restarted.history()[0]['action'], 'seller')
 

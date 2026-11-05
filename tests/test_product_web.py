@@ -95,9 +95,9 @@ class ProductWebTests(unittest.TestCase):
         self.assertIn('value="bad"',body)
         self.assertIn('Telefone',body)
         self.assertIn('aria-current="page">Configura',body)
-        code, _, body = self.request('POST','/seller-contact',{'name':'Test Seller','contact':'(00) 90000-0000'})
+        code, _, body = self.request('POST','/seller-contact',{'name':'Test Seller','contact':'(67) 90000-0000'})
         self.assertEqual(code,303)
-        self.assertEqual(self.server.admin.seller_contact(),'(00) 90000-0000')
+        self.assertEqual(self.server.admin.seller_contact(),'(67) 90000-0000')
 
     def test_invalid_ai_settings_keep_nonsecret_fields(self):
         self.login()
@@ -143,7 +143,7 @@ class ProductWebTests(unittest.TestCase):
             self.assertEqual(active,self.server.datasets.active_version())
         body, content_type=self.multipart(files,csrf='wrong')
         self.assertEqual(self.request('POST','/dataset/import',body=body,headers={'Content-Type':content_type})[0],403)
-        self.assertEqual(self.request('POST','/seller-contact',{'contact':'(00) 90000-0000'},headers={'Origin':'http://external.test'})[0],403)
+        self.assertEqual(self.request('POST','/seller-contact',{'contact':'(67) 90000-0000'},headers={'Origin':'http://external.test'})[0],403)
 
     def test_basic_ai_save_preserves_settings_and_never_calls_api(self):
         self.login(); config=self.server.provider_config; model=config.models()['google'][0]
@@ -154,7 +154,7 @@ class ProductWebTests(unittest.TestCase):
         state=config.status()['providers']['google']
         self.assertEqual((state['max_calls'],state['max_usd'],state['input_price'],state['output_price']),(57,'3','2','7'))
         self.assertEqual(config.credentials('google'),'test-key')
-        self.assertEqual(self.request('POST','/seller-contact',{'name':'Test Seller','contact':'(00) 90000-0000'})[0],303)
+        self.assertEqual(self.request('POST','/seller-contact',{'name':'Test Seller','contact':'(67) 90000-0000'})[0],303)
         self.assertEqual(self.server.admin.seller_name(),'Test Seller')
 
     def test_chat_callback_does_not_deadlock_and_errors_are_friendly(self):

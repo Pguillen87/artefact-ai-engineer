@@ -79,7 +79,6 @@ class GeminiRecommendationAndEmptySearchTests(unittest.TestCase):
                 if conversational:
                     provider = fixtures.ScriptedProvider(
                         [fixtures.call('search_products', {'text': 'Korg Synth'}, 'price')],
-                        [fixtures.call('search_products', {'text': 'Korg Synth', 'installments': 3}, 'parts')],
                         [fixtures.call('recommend_products', {'text': 'Korg Synth'}, 'alternatives')])
                     agent = ConversationAgent(self.snapshot, provider)
                     calls = []

@@ -15,7 +15,7 @@ MAX_FILE_BYTES = 10 * 1024 * 1024
 MAX_TOTAL_BYTES = 30 * 1024 * 1024
 
 
-def _snapshot(files, version=0, contact='(00) 90000-0000', seller_name=''):
+def _snapshot(files, version=0, contact='', seller_name=''):
     tables = {name: _parse(name, files[name]) for name in SCHEMAS}
     _check_relations(tables)
     hashes = {name: hashlib.sha256(files[name]).hexdigest() for name in SCHEMAS}
@@ -144,13 +144,13 @@ class DatasetStore:
             rows = con.execute('SELECT name,content,digest FROM dataset_files WHERE version_id=?', (version_id,)).fetchall()
             if len(rows) != len(SCHEMAS): raise ValueError('Versão de dataset inexistente ou incompleta')
             if any(not isinstance(raw,bytes) or hashlib.sha256(raw).hexdigest() != digest for name,raw,digest in rows): raise StructuralError('Integridade da versão do dataset comprometida')
-            contact='(00) 90000-0000'
+            contact=''
             seller_name=''
             if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='public_settings'").fetchone():
                 setting=con.execute("SELECT value FROM public_settings WHERE key='seller_contact'").fetchone()
                 if setting:
-                    from .admin import _validate_contact
-                    contact=_validate_contact(setting[0])
+                    from .admin import _configured_contact
+                    contact=_configured_contact(setting[0])
                 name=con.execute("SELECT value FROM public_settings WHERE key='seller_name'").fetchone()
                 if name:
                     from .admin import _validate_seller_name

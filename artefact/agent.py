@@ -235,8 +235,15 @@ def prepare_commercial_call(name, args, text, snapshot, decision, product_id=Non
                 not (decision.scope.options and args.get('category') and not args.get('text'))):
             raise ValueError('conflicting_price_basis')
         return name, args
+    if (decision.kind == 'catalog' and decision.amount_role == 'budget_cap' and
+            decision.product is not None and decision.scope.max_price is not None and
+            decision.catalog_amount is not None and decision.catalog_amount > decision.scope.max_price):
+        raise ValueError('product_exceeds_budget')
     catalog_options = (name == 'search_products' and decision.allows_catalog_options and
                        any(key in args for key in ('category', 'min_price', 'max_price')))
+    mismatch = decision.mismatch()
+    if quoting and mismatch and not mismatch.get('catalog_quote_authorized') and not catalog_options:
+        raise ValueError('conflicting_price_basis')
     if (decision.kind == 'ambiguous' and decision.product is not None and
             decision.restriction is None and not catalog_options):
         raise ValueError('conflicting_price_basis')
@@ -395,6 +402,9 @@ def prepared_rejection_result(rejection, decision):
         mismatch['catalog_quote_authorized'] = False
         return {'consulta': 'price_mismatch', 'resultado': mismatch}
     name, reason = rejection.name, rejection.reason
+    if decision.restriction == 'ambiguous_product_selection':
+        return {'consulta': 'commercial_clarification',
+                'resultado': {'reason': 'ambiguous_product_selection'}}
     if name == 'installment_quote' and reason in {'invalid_quote_amount', 'invalid_quote_count'}:
         return {'consulta': 'execution_clarification', 'resultado': {'tool': name}}
     if name == 'installment_quote':
@@ -595,6 +605,14 @@ class Agent:
                         self.snapshot, text, product_id, decision)
                         if args['topic'] == 'shipping' else get_policy(
                             args['topic'], requested_scope_topics(text)))
+                    if args['topic'] == 'contacts' and self.snapshot.seller_contact:
+                        result = dict(result)
+                        seller = self.snapshot.seller_name.strip()
+                        result['summary'] = (
+                            f'Fale com {seller} pelo telefone {self.snapshot.seller_contact}.'
+                            if seller else
+                            f'Telefone configurado para contato com a loja: {self.snapshot.seller_contact}.')
+                        result['source'] = 'configured seller settings'
                 elif name=='request_technical_review' and set(args)=={'product_id','field','reason'}:
                     pid=args['product_id']; field=args['field']; reason=args['reason']
                     if self.review_submit is None or type(pid) is not int or not isinstance(field,str) or not isinstance(reason,str): return FALLBACK

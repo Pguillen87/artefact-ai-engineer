@@ -161,7 +161,7 @@ class ContradictionTests(unittest.TestCase):
   with TemporaryDirectory() as d:
    root=Path(d);write_dataset(root)
    provider=Mock();provider.request.return_value={'output':[{'type':'function_call','name':'orders','arguments':'{"full_name":"Synthetic Customer"}','call_id':'x'}, {'type':'message','content':[{'type':'output_text','text':'Seu pagamento está confirmado.'}]}]}
-   answer=ConversationAgent(load_dataset(root),provider).answer('Meu nome é Synthetic Customer, veja meu pedido',chat_id=1)
+   answer=ConversationAgent(load_dataset(root),provider).answer('Veja meu pedido fake@example.invalid',chat_id=1)
    self.assertNotIn('pagamento está confirmado',answer.lower())
    self.assertIn('confirmação do pagamento não informada',answer.lower())
 
@@ -211,7 +211,7 @@ class ThreeMockedJourneysTests(unittest.TestCase):
   sequences=[
    ('Qual preço Korg?', 'search_products', '{"text":"Korg"}', 'O Korg Synth custa 1127.50.'),
    ('Qual desconto Pix?', 'policy', '{"topic":"pix"}', 'O Pix dá 5% sem acumular com promoção.'),
-   ('Meu nome é Synthetic Customer, meu pedido?', 'orders', '{"full_name":"Synthetic Customer"}', 'O pedido registra total 1127.50.')]
+   ('Meu pedido fake@example.invalid?', 'orders', '{"full_name":"Synthetic Customer"}', 'O pedido registra total 1127.50.')]
   with TemporaryDirectory() as d:
    root=Path(d);write_dataset(root);state=State(root/'usage.db')
    wire=iter({'output':[{'type':'function_call','name':name,'arguments':args,'call_id':'call'}],
@@ -231,7 +231,7 @@ class ThreeMockedJourneysTests(unittest.TestCase):
     adapter.handle({'update_id':index,'message':{'chat':{'id':index+1,'type':'private'},'text':question}})
    self.assertEqual(send.call_count,3)
    self.assertTrue(all('não consegui' not in call.args[1].lower() for call in send.call_args_list))
-   self.assertEqual(state.usage()['calls'],6)
+   self.assertEqual(state.usage()['calls'],4)
 
 class LocaleEvidenceTests(unittest.TestCase):
  def test_brl_format_is_compared_numerically_to_tool_evidence(self):
@@ -259,7 +259,7 @@ class CriticalEvidenceTests(unittest.TestCase):
    self.assertIn('2.500,00' if value=='2500.00' else '250,00',answer)
  def test_delivered_status_is_not_physical_delivery_confirmation(self):
   for reply in ('Entregue fisicamente em 01/01/2026.','Recebido pelo cliente.','A entrega foi confirmada.','Pagamento confirmado.'):
-   answer=self._answer({'orders':{'status':'delivered','estimated_delivery':'2026-01-03'}},'orders',{'full_name':'Synthetic Customer'},reply,'Synthetic Customer pedido')
+   answer=self._answer({'orders':{'status':'delivered','estimated_delivery':'2026-01-03'}},'orders',{'full_name':'Synthetic Customer'},reply,'Pedido 1 fake@example.invalid')
    self.assertIn('status cadastrado',answer.lower());self.assertIn('entregue',answer.lower())
    self.assertNotIn('confirmada em',answer.lower());self.assertNotIn('pagamento confirmado',answer.lower())
    self.assertIn('data efetiva',answer.lower())

@@ -12,6 +12,7 @@ from .agent import (Agent, CLARIFY, FALLBACK, ORDER_AUTH_CLARIFY, TOOLS, WRITE_I
 from .chat_limits import MAX_ASSISTANT_ANSWER_CHARS, MAX_USER_MESSAGE_CHARS
 from .context import (ConversationContext, complete_catalog_list_request, customer_id_for_contact, explicit_order_id,
                       explicit_product, has_customer_contact,
+                      is_customer_identity_attempt,
                       local_order_lookup_requested, next_context, order_followup, product_followup,
                       redact_contact_details, redact_customer_names,
                       resolve_commercial_basis, confirms_catalog_price)
@@ -32,6 +33,15 @@ from .services import Catalog, OrderService, MAX_SEARCH_RESULTS
 from .telemetry import event, operation_id
 
 _TOOL_NAMES = {item['name'] for item in TOOLS}
+
+
+def _requests_review_write(text):
+    normalized = normalize(text)
+    return bool(
+        re.search(r'^\s*(?:(?:por favor|por gentileza)[, ]+)?'
+                  r'(?:registre|abra|solicite|quero registrar|quero abrir|'
+                  r'gostaria de registrar|gostaria de abrir)\b', normalized) and
+        re.search(r'\b(?:revisao|analise tecnica)\b', normalized))
 
 
 def local_social_reply(text):
@@ -55,10 +65,17 @@ def is_local_social_request(text):
 
 
 def _shipping_quote_clarification(text, snapshot, basis):
-    if (requested_policy_topics(text) != {'shipping'} or
-            not is_shipping_quote_request(text, snapshot)):
+    if requested_policy_topics(text) != {'shipping'}:
         return None
-    if re.search(r'\bpiano\s+digit(?:al|ais)\b', normalize(text)):
+    spoken = normalize(text)
+    special_piano = bool(re.search(r'\bpiano\s+digit(?:al|ais)\b', spoken) and
+                         re.search(r'\b(?:entreg\w*|frete|prazo|taxa|cotar|cotacao)\b', spoken) and
+                         not re.search(r'\b(?:quais?|opcoes?|modelos?|disponiveis?)\b', spoken))
+    if not special_piano and not is_shipping_quote_request(text, snapshot):
+        return None
+    if has_independent_catalog_request(text, snapshot):
+        return None
+    if special_piano:
         return ('Para piano digital, o frete e o prazo precisam de cotação especial com a loja. '
                 'A taxa e o prazo ainda não estão confirmados; qual é o modelo exato para solicitar a verificação?')
     destination_known = local_shipping_destination(text)
@@ -66,6 +83,11 @@ def _shipping_quote_clarification(text, snapshot, basis):
     product = products[0] if len(products) == 1 else None
     if product is not None and product_reference(text, product['name']) not in {'affirmative', 'mentioned'}:
         product = None
+    if product is not None and basis.mismatch():
+        if any(value.role == 'shipping_amount' for value in basis.values):
+            return None
+        return (f'O valor informado para {product["name"]} diverge do preço efetivo do catálogo. '
+                'Quer que eu calcule com o preço cadastrado?')
     if not destination_known and product is None:
         return ('Para calcular o total, informe o nome ou modelo do produto e o CEP de entrega. '
                 'A cotação local automática cobre Campo Grande/MS.')
@@ -77,15 +99,14 @@ def _shipping_quote_clarification(text, snapshot, basis):
             return ('Não consegui identificar um produto exato nesta consulta. '
                     'Confirme o nome ou modelo que deseja cotar para Campo Grande/MS.')
         return 'Qual é o nome ou modelo do instrumento que deseja cotar para Campo Grande/MS?'
-    if basis.mismatch():
-        return (f'O valor informado para {product["name"]} diverge do preço efetivo do catálogo. '
-                'Quer que eu calcule com o preço cadastrado?')
     return None
 
 
-def _direct_plan_for_request(text, snapshot, basis):
+def _direct_plan_for_request(text, snapshot, basis, *, allow_policy_shortcut=True):
     price_mismatch = basis.mismatch()
     policy_topics = requested_policy_topics(text)
+    if _requests_review_write(text):
+        return None
     direct_status = direct_product_status_plan(text, snapshot)
     if (price_mismatch is not None or basis.count is not None or
             basis.scope.max_price is not None):
@@ -96,8 +117,9 @@ def _direct_plan_for_request(text, snapshot, basis):
         return ('search_products', {'text': basis.product['name'],
                                     'available_only': False,
                                     'installments': basis.count})
-    if (basis.kind in {'hypothetical', 'total'} and basis.product is None and
-            basis.quote_allowed and policy_topics.issubset({'installments'})):
+    if (basis.kind in {'hypothetical', 'total'} and basis.quote_allowed and
+            (basis.kind == 'hypothetical' or basis.product is None) and
+            policy_topics.issubset({'installments'})):
         quote_request = basis.request()
         if quote_request is not None:
             return ('installment_quote', {
@@ -112,9 +134,9 @@ def _direct_plan_for_request(text, snapshot, basis):
             return ('search_products', {'text': products[0]['name']})
     if direct_status is not None and not policy_topics:
         return direct_status
-    if (len(policy_topics) == 1 and price_mismatch is None and basis.restriction is None and
+    if (allow_policy_shortcut and policy_topics == {'scope'} and price_mismatch is None and basis.restriction is None and
             not direct_status and not has_independent_catalog_request(text, snapshot)):
-        return ('policy', {'topic': next(iter(policy_topics))})
+        return ('policy', {'topic': 'scope'})
     if catalog_plan is not None and not policy_topics:
         return catalog_plan
     return None
@@ -123,7 +145,8 @@ def _direct_plan_for_request(text, snapshot, basis):
 def local_only_request(text, snapshot, previous=None):
     """Only greetings and order lookups terminate locally without a provider."""
     return bool(text.strip() == '/start' or is_local_social_request(text) or
-                local_order_lookup_requested(text, previous, snapshot))
+                (local_order_lookup_requested(text, previous, snapshot) and
+                 not _requests_review_write(text)))
 
 
 @dataclass(frozen=True)
@@ -345,7 +368,8 @@ class ConversationAgent:
         else:
             customer_id = matched_id
             contact_matched = matched_id is not None
-            if customer_id is None and prior and prior.customer_contact_matched:
+            if (customer_id is None and prior and prior.customer_contact_matched and
+                    not is_customer_identity_attempt(text, snapshot)):
                 customer_id = prior.customer_id
                 contact_matched = True
             changed_customer = bool(
@@ -444,7 +468,8 @@ class ConversationAgent:
             snapshot_started = time.monotonic()
             snapshot = self.snapshot_loader() if self.snapshot_loader else self.snapshot
             _add_timing(self.last_trace, 'snapshot', snapshot_started)
-            if local_order_lookup_requested(raw_text, prior, snapshot):
+            if (local_order_lookup_requested(raw_text, prior, snapshot) and
+                    not _requests_review_write(raw_text)):
                 stage = 'order_lookup'
                 answer = self._answer_order_request(raw_text, prior, snapshot, chat_id, op)
                 return answer
