@@ -1,3 +1,5 @@
 *
 !artefact/
 !artefact/*.py
+!requirements.txt
+!Dockerfile

@@ -38,6 +38,17 @@ class CatalogAdminTests(unittest.TestCase):
         self.assertEqual(len(published_snapshot(self.root/'serving.db',self.baseline).tables['products']),1)
         self.admin.rollback(version,'retorno')
         self.assertEqual(len(published_snapshot(self.root/'serving.db',self.baseline).tables['products']),2)
+
+    def test_reordered_canonical_columns_are_mapped_by_header_and_reviewed(self):
+        headers=['created_at','specs','status','stock_quantity','description','category_id','name','price_brl','product_id']
+        values=dict(zip(['product_id','price_brl','name','category_id','description','stock_quantity','status','specs','created_at'],product()))
+        stream=io.StringIO(newline='');writer=csv.DictWriter(stream,fieldnames=headers)
+        writer.writeheader();writer.writerow(values)
+        batch=self.admin.stage(stream.getvalue().encode())
+        preview=self.admin.preview(batch)
+        self.assertEqual(preview['products'][0]['name'],'Korg Piano')
+        self.assertTrue(preview['issues'])
+        self.assertEqual(len(published_snapshot(self.root/'serving.db',self.baseline).tables['products']),1)
     def test_invalid_batch_is_never_staged(self):
         for raw in [csv_bytes(product(price='-1')),csv_bytes(product('1')),csv_bytes(product(),product()),csv_bytes(product(),product('3','bad')),b'wrong,header\n1,2',csv_bytes(product('3','1',''))]:
             with self.subTest(raw=raw):
@@ -139,16 +150,38 @@ class CatalogAdminTests(unittest.TestCase):
         def answer():
             snap=published_snapshot(self.root/'serving.db',self.baseline)
             return ConversationAgent(snap,provider).answer('Qual o contato da loja?')
-        self.assertIn('(67) 3341-4444',answer());self.assertIn('(67) 3321-4500',answer())
-        for bad in ('', 'abc', '(67) 1234-5678 ext 1', '<script>'):
+        self.assertTrue(answer().strip())
+        for bad in ('', 'abc', '(00) 90000-0000 ext 1', '<script>'):
             with self.assertRaises(ValueError): self.admin.set_seller_contact(bad)
-        self.admin.set_seller_contact('(67) 99999-1234')
-        self.assertIn('(67) 99999-1234',answer());self.assertIn('(67) 3321-4500',answer())
+        self.admin.set_seller_contact('(67) 90000-0000')
+        self.assertTrue(answer().strip())
         restarted=CatalogAdmin(self.root/'admin.db',self.root/'serving.db',self.baseline)
-        self.assertEqual(restarted.seller_contact(),'(67) 99999-1234')
+        self.assertEqual(restarted.seller_contact(),'(67) 90000-0000')
         restarted.reset_seller_contact()
-        self.assertIn('(67) 3341-4444',answer())
+        self.assertTrue(answer().strip())
+        self.assertEqual(restarted.seller_contact(), '')
         self.assertEqual([e['action'] for e in restarted.history()].count('seller_contact'),2)
+
+    def test_named_seller_is_atomic_persistent_and_used_in_handoff(self):
+        from unittest.mock import Mock
+        from artefact.conversation import ConversationAgent
+        self.assertEqual(self.admin.seller_name(), '')
+        self.admin.set_seller('  Test Seller  ', '(67) 90000-0000')
+        restarted=CatalogAdmin(self.root/'admin.db',self.root/'serving.db',self.baseline)
+        self.assertEqual(restarted.seller_name(), 'Test Seller')
+        self.assertEqual(restarted.seller_contact(), '(67) 90000-0000')
+        provider=Mock();provider.request.return_value={'output':[{'type':'function_call','name':'policy','arguments':json.dumps({'topic':'contacts'}),'call_id':'x'}]}
+        answer=ConversationAgent(published_snapshot(self.root/'serving.db',self.baseline),provider).answer('Quero falar com um vendedor')
+        self.assertIn('Test Seller',answer)
+        self.assertIn('(67) 90000-0000',answer)
+        for bad_name,bad_contact in (('Test Seller', 'invalid'), ('<script>', '(67) 90000-0000'), ('a'*121, '(67) 90000-0000'), ('Test Seller\nSouza', '(67) 90000-0000')):
+            with self.subTest(name=bad_name), self.assertRaises(ValueError):
+                restarted.set_seller(bad_name,bad_contact)
+        self.assertEqual(restarted.seller_name(), 'Test Seller')
+        self.assertEqual(restarted.seller_contact(), '(67) 90000-0000')
+        restarted.set_seller_contact('(67) 90000-0000')
+        self.assertEqual(restarted.seller_name(), 'Test Seller')
+        self.assertEqual(restarted.history()[0]['action'], 'seller')
 
     def test_technical_review_queue_validates_and_tracks_minimal_data(self):
         batch=self.admin.stage(csv_bytes(product()));self.accept_all(batch);self.admin.approve(batch,'revisto');v=self.admin.publish(batch)

@@ -1,58 +1,71 @@
 services:
   agent:
     build: .
+    command: ["python", "-m", "artefact.chat_api"]
+    depends_on:
+      admin:
+        condition: service_healthy
     environment:
-      ARTEFACT_DATA_DIR: /data
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-6-luna}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      ENABLE_REAL_LLM: ${ENABLE_REAL_LLM:-0}
-      ARTEFACT_STATE_PATH: /state/agent.sqlite
       ARTEFACT_CATALOG_DB: /catalog/catalog.sqlite
-      ARTEFACT_REVIEW_URL: ${ARTEFACT_REVIEW_URL:-}
-      ARTEFACT_REVIEW_TOKEN: ${ARTEFACT_REVIEW_TOKEN:-}
-      OPENAI_BUDGET_USD: ${OPENAI_BUDGET_USD:-}
-      OPENAI_MAX_CALLS: ${OPENAI_MAX_CALLS:-}
-      OPENAI_INPUT_USD_PER_MILLION: ${OPENAI_INPUT_USD_PER_MILLION:-}
-      OPENAI_OUTPUT_USD_PER_MILLION: ${OPENAI_OUTPUT_USD_PER_MILLION:-}
+      ARTEFACT_CONFIG_DB: /config/providers.sqlite
+      ARTEFACT_MODEL_CATALOG_PATH: ${ARTEFACT_MODEL_CATALOG_PATH:-}
+      ARTEFACT_MASTER_KEY_PATH: /secrets/master.key
+      ARTEFACT_AGENT_TOKEN_FILE: /secrets/service-token
+      ARTEFACT_STATE_PATH: /state/agent.sqlite
+      ARTEFACT_CHAT_DB: /state/chat.sqlite
+      ARTEFACT_AGENT_BIND: 0.0.0.0
+      ARTEFACT_AGENT_PORT: 8081
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_ALLOWED_CHAT_ID: ${TELEGRAM_ALLOWED_CHAT_ID:-}
     volumes:
-      - type: bind
-        source: ${ARTEFACT_SOURCE_DIR:?set ARTEFACT_SOURCE_DIR to the original data directory}
-        target: /data
-        read_only: true
       - agent_state:/state
-      - catalog_data:/catalog:ro
+      - catalog_data:/catalog
+      - config_data:/config
+      - secrets_data:/secrets
     read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket;s=socket.create_connection(('127.0.0.1',8081),3);s.close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
   admin:
     build: .
-    command: ["python", "-m", "artefact.admin_web"]
-    profiles: ["admin"]
+    command: ["python", "-m", "artefact.product_web"]
     environment:
-      ARTEFACT_DATA_DIR: /data
-      ARTEFACT_ADMIN_BIND: 0.0.0.0
-      ARTEFACT_ADMIN_PORT: 8080
       ARTEFACT_ADMIN_PASSWORD: ${ARTEFACT_ADMIN_PASSWORD:-}
-      ARTEFACT_ADMIN_INITIALIZE: ${ARTEFACT_ADMIN_INITIALIZE:-0}
-      ARTEFACT_REVIEW_TOKEN: ${ARTEFACT_REVIEW_TOKEN:-}
+      ARTEFACT_MODEL_CATALOG_PATH: ${ARTEFACT_MODEL_CATALOG_PATH:-}
+      ARTEFACT_CONFIG_DIR: /config
+      ARTEFACT_PUBLIC_PORT: ${ARTEFACT_ADMIN_PORT:-8080}
+      ARTEFACT_SECRET_DIR: /secrets
       ARTEFACT_ADMIN_DB: /admin/admin.sqlite
       ARTEFACT_CATALOG_DB: /catalog/catalog.sqlite
+      ARTEFACT_AGENT_URL: http://agent:8081
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${ARTEFACT_ADMIN_PORT:-8080}:8080"
     volumes:
-      - type: bind
-        source: ${ARTEFACT_SOURCE_DIR:?set ARTEFACT_SOURCE_DIR to the original data directory}
-        target: /data
-        read_only: true
       - admin_data:/admin
       - catalog_data:/catalog
+      - config_data:/config
+      - secrets_data:/secrets
     read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket;s=socket.create_connection(('127.0.0.1',8080),3);s.close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 volumes:
   admin_data:
   catalog_data:
   agent_state:
+  config_data:
+  secrets_data:

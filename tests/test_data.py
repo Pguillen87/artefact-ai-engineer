@@ -6,6 +6,11 @@ import unittest
 from decimal import Decimal
 
 from artefact.data import load_dataset, StructuralError
+from baseline_support import (
+ assert_baseline_unchanged,
+ baseline_sha256,
+ resolve_original_baseline_dir,
+)
 
 HEADERS = {
  'categories': ['category_id','name','description'],
@@ -51,6 +56,14 @@ class DataTests(unittest.TestCase):
    with self.subTest(changes=changes), TemporaryDirectory() as d:
     root=Path(d);write_dataset(root,changes)
     with self.assertRaises(StructuralError): load_dataset(root)
+ def test_subcent_currency_rejected_without_limiting_discount_precision(self):
+  for changes in ({'products':{'price_brl':'100.001'}}, {'orders':{'total_brl':'100.001'}}, {'products':{'price_brl':'100.000'}}):
+   with self.subTest(changes=changes), TemporaryDirectory() as d:
+    root=Path(d);write_dataset(root,changes)
+    with self.assertRaises(StructuralError): load_dataset(root)
+  with TemporaryDirectory() as d:
+   root=Path(d);write_dataset(root,{'promotions':{'discount_percent':'7.125'}})
+   self.assertEqual(load_dataset(root).tables['promotions'][0]['discount_percent'],Decimal('7.125'))
  def test_duplicate_key_and_missing_header_are_rejected(self):
   with TemporaryDirectory() as d:
    root=Path(d);write_dataset(root,extra={'products':ROWS['products']})
@@ -59,9 +72,8 @@ class DataTests(unittest.TestCase):
    root=Path(d);write_dataset(root);(root/'orders.csv').write_text('bad,header\n1,2\n')
    with self.assertRaises(StructuralError): load_dataset(root)
  def test_real_baseline(self):
-  root=Path(r'C:\App\Artefact\Desafio Técnico AI Engineer 2026\data')
-  if not root.exists(): self.skipTest('local private baseline unavailable')
-  before={p.name:p.read_bytes() for p in root.glob('*.csv')}
+  root=resolve_original_baseline_dir(self)
+  before=baseline_sha256(root)
   snapshot=load_dataset(root, verify_baseline=True)
   product=next(p for p in snapshot.tables['products'] if p['product_id']==142)
   self.assertEqual(product['price_brl'],Decimal('1127'))
@@ -82,7 +94,34 @@ class DataTests(unittest.TestCase):
    send=Mock();adapter=TelegramAdapter(ConversationAgent(snapshot,provider),send,State(Path(d)/'s.db'),allowed_chat_id=123)
    adapter.handle({'update_id':1,'message':{'chat':{'id':123,'type':'private'},'text':'Preço de '+product['name']+'?'}})
    self.assertIn('1.127,00',send.call_args.args[1])
-  self.assertEqual(before,{p.name:p.read_bytes() for p in root.glob('*.csv')})
+  from artefact.services import Catalog
+  quote_cases=[
+   (127,('R$ 359,00','10%','R$ 323,10')),
+   (94,('R$ 5.999,00','8%','R$ 5.519,08')),
+   (121,('R$ 549,00','20%','R$ 439,20')),
+   (95,('R$ 2.199,00','5%','R$ 2.089,05')),
+  ]
+  for product_id,expected in quote_cases:
+   item=Catalog(snapshot).product(product_id)
+   self.assertIsNotNone(item)
+   provider=Mock()
+   provider.request.return_value={'output':[{'type':'function_call','name':'search_products',
+    'arguments':json.dumps({'text':item['name']}),'call_id':'commercial'}]}
+   answer=ConversationAgent(snapshot,provider).answer('Preço e condição comercial do '+item['name']+'?')
+   self.assertTrue(all(value in answer for value in expected),f'original product {product_id} quote incomplete')
+   self.assertIn('snapshot',answer.lower())
+   self.assertEqual(provider.request.call_count,1)
+  item=Catalog(snapshot).product(127)
+  provider=Mock()
+  provider.request.return_value={'output':[
+   {'type':'function_call','name':'search_products','arguments':json.dumps({'text':item['name']}),'call_id':'product'},
+   {'type':'function_call','name':'policy','arguments':'{"topic":"pix"}','call_id':'pix'}]}
+  answer=ConversationAgent(snapshot,provider).answer('Posso adicionar 5% Pix ao '+item['name']+' em promoção?')
+  self.assertIn('R$ 323,10',answer)
+  self.assertIn('não acumula',answer.lower())
+  self.assertNotIn('R$ 306,95',answer)
+  self.assertEqual(provider.request.call_count,1)
+  assert_baseline_unchanged(self,before,root)
 
 class AdditionalDataTests(unittest.TestCase):
  def test_wrong_category_and_no_false_brand_for_multiple_mentions(self):
