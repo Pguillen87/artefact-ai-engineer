@@ -201,6 +201,8 @@ def _render_product_detail(item):
         lines = [_render_price_quote(item['name'], quote, item['available'])]
         availability = 'disponível' if item['available'] else 'indisponível'
         lines.append(f"Disponibilidade: {availability} no cadastro, estoque registrado de {item['stock_quantity']} unidade(s).")
+    if item.get('status') == 'coming_soon':
+        lines.append('Status comercial: em breve. Sem pronta entrega; a quantidade no campo de estoque não indica unidades disponíveis para venda. Não há previsão de chegada informada.')
     specs = item.get('specs')
     if not isinstance(specs, dict):
         raise ValueError('invalid product specifications')

@@ -250,10 +250,21 @@ _POLICIES = {
     'regret': {'summary':'Para compras online, é possível solicitar o arrependimento em até 7 dias corridos após o recebimento, conforme a regra aprovada para esta demonstração. Esse prazo é para solicitar orientação; não confirma que uma devolução foi aprovada ou iniciada. A data de recebimento e as condições do caso precisam ser confirmadas com a loja.', 'source':'ARTEFACT-12 H01 e interpretação aprovada pelo usuário nesta missão'},
     'hours': {'summary':'No sábado, expediente até 13h; domingos e feriados fechados. Demais horários não confirmados neste resumo.', 'source':'ARTEFACT-12, casos A03 e A04'},
     'contacts': {'summary':'Os dados de contato da demonstração são divergentes; confirme o canal oficial com a loja.', 'source':'Operator confirmation required'},
-    'scope': {'summary':'A loja atende instrumentos musicais do catálogo e não comercializa acessórios como palhetas, cabos ou amplificadores. Previsão do tempo e pesquisa climática estão fora do escopo do atendimento.', 'source':'ARTEFACT-12 A05–A06'},
+    'scope': {'summary':'A loja atende instrumentos musicais do catálogo e não comercializa acessórios como encordoamentos, palhetas, cabos, cases, pedais ou amplificadores. Previsão do tempo e pesquisa climática estão fora do escopo do atendimento.', 'source':'ARTEFACT-12 A05–A06'},
 }
 
 
-def get_policy(topic):
+def get_policy(topic, scope_topics=None):
     policy = _POLICIES.get(topic)
-    return dict(policy) if policy else None
+    if not policy:
+        return None
+    result = dict(policy)
+    if topic == 'scope' and scope_topics:
+        parts = []
+        if 'accessories' in scope_topics:
+            parts.append('A loja atende instrumentos musicais do catálogo e não comercializa acessórios como encordoamentos, palhetas, cabos, cases, pedais ou amplificadores.')
+        if 'weather' in scope_topics:
+            parts.append('Previsão do tempo e pesquisa climática estão fora do escopo do atendimento.')
+        if parts:
+            result['summary'] = ' '.join(parts)
+    return result

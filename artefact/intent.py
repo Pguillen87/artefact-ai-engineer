@@ -294,17 +294,53 @@ def _money_values(text: str) -> set[Decimal]:
     return values
 
 
+_SCOPE_ACCESSORY_PATTERN = (
+    r'\b(?:acessorios?|palhetas?|cabos?|amplificadores?|cases?|pedais?|'
+    r'encordoamento\w*|jogos?\s+de\s+cordas?|cordas?\s+(?:para|de)\s+'
+    r'(?:viol\w*|guitarra|baixo))\b')
+_SCOPE_WEATHER_PATTERN = r'\b(?:previsao do tempo|clima)\b'
+
+
+def _scope_accessory_mentioned(clause: str) -> bool:
+    if re.search(_SCOPE_ACCESSORY_PATTERN, clause):
+        return True
+    if not re.search(r'\bcordas?\b', clause):
+        return False
+    instrument_string_count = re.search(
+        r'\b(?:viol\w*|guitarra|baixo|ukulele)\s+(?:de|com)\s+'
+        r'(?:\d+|um|uma|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)\s+cordas?\b|'
+        r'\bquantas?\s+cordas?\b', clause)
+    if instrument_string_count:
+        return False
+    return bool(re.search(
+        r'\b(?:vend\w*|comercializa\w*|tem|possui|trabalh\w*|quer\w*|comprar|'
+        r'procura\w*|busca\w*)\s+(?:(?:as?|algumas?)\s+)?cordas?\b', clause))
+
+
+def requested_scope_topics(text: str) -> frozenset[str]:
+    """Return the independently requested scope boundaries in a message."""
+    topics = set()
+    for clause in intent_clauses(text):
+        if clause_polarity(clause) != 'affirmative':
+            continue
+        if _scope_accessory_mentioned(clause):
+            topics.add('accessories')
+        if re.search(_SCOPE_WEATHER_PATTERN, clause):
+            topics.add('weather')
+    return frozenset(topics)
+
+
 _POLICY_TOPIC_PATTERNS = {
     'exchange': r'\b(?:troca\w*|trocar|defeito\w*)\b',
     'warranty': r'\b(?:garantia\w*|fabricante|mau uso|cobertura)\b',
     'regret': r'\b(?:arrepend\w*|desist\w*|devolu\w*|devolver)\b',
-    'shipping': r'\b(?:frete|envio|entrega|entregar|cheg\w*)\b',
+    'shipping': r'\b(?:frete|envio|entreg\w*|cheg\w*)\b',
     'installments': r'\b(?:parcel\w*|vezes|crediario)\b',
     'payment_mix': r'\b(?:combinar|dividir|misturar|formas de pagamento|pagamentos)\b',
     'pix': r'\bpix\b',
     'hours': r'\b(?:horario\w*|funcionamento|aberto|abre|fecha)\b',
     'contacts': r'\b(?:contato\w*|telefone|vendedor\w*|ligar|whats?\s*app|wpp|zap)\b',
-    'scope': r'\b(?:acessorios?|palhetas?|cabos|amplificadores|previsao do tempo|clima)\b',
+    'scope': '(?:' + _SCOPE_ACCESSORY_PATTERN + '|' + _SCOPE_WEATHER_PATTERN + ')',
 }
 _BRAZILIAN_UFS = frozenset({
     'ac', 'al', 'ap', 'am', 'ba', 'ce', 'df', 'es', 'go', 'ma', 'mt', 'ms', 'mg',
@@ -317,10 +353,13 @@ def requested_policy_topics(text: str) -> frozenset[str]:
     spoken = normalize(text)
     mentioned = {key for key, pattern in _POLICY_TOPIC_PATTERNS.items()
                  if re.search(pattern, spoken)}
+    if requested_scope_topics(text):
+        mentioned.add('scope')
     requested = set()
     for topic in mentioned:
         for clause in intent_clauses(text):
-            if not re.search(_POLICY_TOPIC_PATTERNS[topic], clause):
+            if (not re.search(_POLICY_TOPIC_PATTERNS[topic], clause) and
+                    not (topic == 'scope' and _scope_accessory_mentioned(clause))):
                 continue
             # A reported negative experience can still ask for the applicable policy.
             request_clause = re.sub(r'\bnao\s+(?:gostei|chegou|recebi|funciona|foi entregue)\b', '', clause)
@@ -362,15 +401,16 @@ def is_shipping_quote_request(text: str, snapshot) -> bool:
     """Separate a freight amount request from a general question about shipping policy."""
     spoken = normalize(text)
     has_freight = bool(re.search(r'\bfrete\b', spoken))
-    if not has_freight:
-        return False
+    has_delivery = bool(re.search(r'\bentreg\w*\b', spoken))
     has_amount_question = bool(re.search(
         r'\b(?:valor|preco|quanto|custa|custo|taxa|cotacao|cotar)\b', spoken))
     if re.search(r'\b(?:politica|regras?|condicoes?)\b', spoken) and not has_amount_question:
         return False
-    if has_amount_question or re.search(r'\bqual\s+(?:o\s+)?frete\b', spoken):
+    if ((has_amount_question and (has_freight or has_delivery)) or
+            (has_freight and re.search(r'\bqual\s+(?:o\s+)?frete\b', spoken))):
         return True
-    return bool(local_shipping_destination(text) or mentioned_products(text, snapshot))
+    return bool(has_freight and
+                (local_shipping_destination(text) or mentioned_products(text, snapshot)))
 
 
 def validate_cheapest_intent(text: str, snapshot) -> bool:

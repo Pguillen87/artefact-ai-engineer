@@ -376,7 +376,10 @@ def pix_policy_followup(text: str) -> bool:
 
 def explicit_order_id(text: str) -> int | None:
     spoken = normalize(text)
-    matches = re.findall(r'\bpedido(?:\s+(?:numero|n[ºo.]?))?\s+(\d+)\b', spoken)
+    order_reference = r'\bpedido(?:\s*(?:#\s*|n(?:umero|[ºo°.]?)\s*#?\s*|\s+))(\d+)\b'
+    reverse_reference = r'\bn(?:umero|[ºo°.]?)\s*#\s*(\d+)\s+(?:do|de)\s+pedido\b'
+    matches = (re.findall(order_reference, spoken) +
+               re.findall(reverse_reference, spoken))
     unique = set(matches)
     return int(next(iter(unique))) if len(unique) == 1 else None
 

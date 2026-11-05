@@ -69,7 +69,8 @@ def promotion_price(price: Decimal, discount_percent: Decimal) -> Decimal:
 _MONEY = re.compile(r'(?i)R\$\s*([0-9][0-9.,]*)')
 _COUNT_WORDS = {'um': 1, 'uma': 1, 'dois': 2, 'duas': 2, 'três': 3, 'tres': 3, 'quatro': 4, 'cinco': 5, 'seis': 6, 'sete': 7, 'oito': 8, 'nove': 9, 'dez': 10, 'onze': 11, 'doze': 12}
 _COUNT_PATTERN = r'(?:[0-9]{1,2}|um|uma|dois|duas|tr[eê]s|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)'
-_INSTALLMENT_COUNT = re.compile(r'(?<![\w.,])(' + _COUNT_PATTERN + r')\s*(?:x\b|vezes\b|parcelas?\b)', re.I)
+_INSTALLMENT_COUNT = re.compile(
+    r'(?:\bem\s*|(?<![\w.,]))(' + _COUNT_PATTERN + r')\s*(?:x\b|vezes\b|parcelas?\b)', re.I)
 _ORDER_TOTAL_CONTEXT = re.compile(r'\b(?:pedido|total\s+hist[oó]rico|total\s+registrado|valor\s+do\s+pedido)\b', re.I)
 _PER_INSTALLMENT_CONTEXT = re.compile(r'(?i)(?:por\s+parcela|cada\s+parcela|piso\s+de|m[ií]nimo\s+de|parcela\s+m[ií]nima)')
 

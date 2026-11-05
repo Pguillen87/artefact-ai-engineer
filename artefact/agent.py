@@ -13,7 +13,7 @@ from types import MappingProxyType
 from .services import Catalog, OrderService, get_policy, MAX_SEARCH_RESULTS
 from .chat_limits import MAX_USER_MESSAGE_CHARS
 from .commercial import quote_installments, shipping_quote, parse_brl_mention
-from .intent import (normalize, mentioned_category_ids, validate_catalog_intent,
+from .intent import (normalize, mentioned_category_ids, requested_scope_topics, validate_catalog_intent,
                      validate_policy_intent, validate_cheapest_intent, normalize_catalog_args,
                      is_catalog_discovery, is_shipping_quote_request,
                      local_shipping_destination, mentioned_products, product_reference)
@@ -593,7 +593,8 @@ class Agent:
                         return CLARIFY
                     result=(_shipping_policy_with_quote(
                         self.snapshot, text, product_id, decision)
-                        if args['topic'] == 'shipping' else get_policy(args['topic']))
+                        if args['topic'] == 'shipping' else get_policy(
+                            args['topic'], requested_scope_topics(text)))
                 elif name=='request_technical_review' and set(args)=={'product_id','field','reason'}:
                     pid=args['product_id']; field=args['field']; reason=args['reason']
                     if self.review_submit is None or type(pid) is not int or not isinstance(field,str) or not isinstance(reason,str): return FALLBACK

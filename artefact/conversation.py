@@ -58,6 +58,9 @@ def _shipping_quote_clarification(text, snapshot, basis):
     if (requested_policy_topics(text) != {'shipping'} or
             not is_shipping_quote_request(text, snapshot)):
         return None
+    if re.search(r'\bpiano\s+digit(?:al|ais)\b', normalize(text)):
+        return ('Para piano digital, o frete e o prazo precisam de cotação especial com a loja. '
+                'A taxa e o prazo ainda não estão confirmados; qual é o modelo exato para solicitar a verificação?')
     destination_known = local_shipping_destination(text)
     products = mentioned_products(text, snapshot)
     product = products[0] if len(products) == 1 else None
@@ -100,6 +103,13 @@ def _direct_plan_for_request(text, snapshot, basis):
             return ('installment_quote', {
                 'amount_brl': format(quote_request.stated_amount, '.2f'),
                 'installments': quote_request.count})
+    if (policy_topics == {'pix'} and price_mismatch is None and basis.restriction is None and re.search(
+            r'\b(?:pre[cç]o|quanto\s+(?:custa|fica)|valor|custa|promoc\w*|desconto\w*)\b',
+            normalize(text))):
+        products = [product for product in mentioned_products(text, snapshot)
+                    if product_reference(text, product['name']) in {'affirmative', 'mentioned'}]
+        if len(products) == 1:
+            return ('search_products', {'text': products[0]['name']})
     if direct_status is not None and not policy_topics:
         return direct_status
     if (len(policy_topics) == 1 and price_mismatch is None and basis.restriction is None and
